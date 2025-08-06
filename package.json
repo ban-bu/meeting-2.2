@@ -9,7 +9,7 @@
     "build": "echo 'No build step needed for static files'",
     "postinstall": "cd server && npm install",
     "railway:check": "node railway-check.js",
-    "railway:deploy": "railway up",
+    "railway:deploy": "bash deploy-railway.sh",
     "heroku-postbuild": "cd server && npm install"
   },
   "dependencies": {

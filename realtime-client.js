@@ -228,16 +228,22 @@ class RealtimeClient {
             rememberUpgrade: false,
             // 添加连接优化选项
             autoConnect: true,
-            transports: ['websocket', 'polling'], // 统一使用WebSocket优先
+            transports: ['polling', 'websocket'], // Railway环境优先使用polling
             upgrade: true,
-            rememberUpgrade: true
+            rememberUpgrade: true,
+            // 修复Railway环境连接问题
+            path: '/socket.io/',
+            withCredentials: true,
+            extraHeaders: {
+                'X-Requested-With': 'XMLHttpRequest'
+            }
         };
         
         if (this.isRailway) {
-            // Railway环境优化：直接使用WebSocket，减少连接时间
-            socketConfig.transports = ['websocket'];
-            socketConfig.upgrade = false; // 禁用升级，直接使用WebSocket
-            console.log('🚂 Railway环境：直接使用WebSocket连接');
+            // Railway环境优化：使用polling优先，避免WebSocket帧头问题
+            socketConfig.transports = ['polling', 'websocket'];
+            socketConfig.upgrade = true; // 允许升级到WebSocket
+            console.log('🚂 Railway环境：使用polling优先的传输方式');
         } else {
             // 其他环境使用WebSocket优先
             socketConfig.transports = ['websocket', 'polling'];

@@ -1761,6 +1761,11 @@ function updateCallParticipants() {
             currentUserId
         });
     }
+    
+    // 强制更新通话状态指示器
+    if (isInCall) {
+        showCallStatusIndicator();
+    }
 }
 
 // 开始通话计时
@@ -2483,6 +2488,11 @@ function setupRealtimeClient() {
                 participants = data.participants;
                 renderParticipants();
             }
+            
+            // 强制重新渲染参与者列表以确保创建者功能正确显示
+            setTimeout(() => {
+                renderParticipants();
+            }, 100);
         },
         
         onMessageReceived: async (message) => {
@@ -3931,6 +3941,14 @@ function renderFilteredParticipants(filteredParticipants) {
 
 // 渲染参与者列表（原始函数，保持向后兼容）
 function renderParticipants() {
+    // 添加调试信息
+    console.log('🔍 渲染参与者列表:', {
+        participantsCount: participants.length,
+        windowIsCreator: window.isCreator,
+        windowCurrentRoomInfo: window.currentRoomInfo,
+        currentUserId: currentUserId
+    });
+    
     renderFilteredParticipants(participants);
 }
 
