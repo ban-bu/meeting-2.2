@@ -1,0 +1,243 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>语音通话测试</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            background: #f5f5f5;
+        }
+        .test-section {
+            background: white;
+            padding: 20px;
+            margin: 20px 0;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .participant {
+            display: flex;
+            align-items: center;
+            padding: 10px;
+            margin: 5px 0;
+            background: #f8f9fa;
+            border-radius: 5px;
+        }
+        .avatar {
+            width: 40px;
+            height: 40px;
+            border-radius: 50%;
+            background: #007bff;
+            color: white;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin-right: 10px;
+            font-weight: bold;
+        }
+        .participant-info {
+            flex: 1;
+        }
+        .participant-name {
+            font-weight: bold;
+            margin-bottom: 2px;
+        }
+        .participant-status {
+            font-size: 12px;
+            color: #666;
+        }
+        .status-online {
+            color: #28a745;
+        }
+        .status-muted {
+            color: #dc3545;
+        }
+        button {
+            background: #007bff;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 5px;
+            cursor: pointer;
+            margin: 5px;
+        }
+        button:hover {
+            background: #0056b3;
+        }
+        .debug-info {
+            background: #f8f9fa;
+            padding: 10px;
+            border-radius: 5px;
+            font-family: monospace;
+            font-size: 12px;
+            margin: 10px 0;
+        }
+    </style>
+</head>
+<body>
+    <h1>🔍 语音通话参与者显示测试</h1>
+    
+    <div class="test-section">
+        <h2>📋 测试说明</h2>
+        <p>这个页面用于测试语音通话参与者显示功能。点击下面的按钮来模拟不同的场景。</p>
+    </div>
+    
+    <div class="test-section">
+        <h2>🎮 测试控制</h2>
+        <button onclick="testSingleUser()">测试单人通话</button>
+        <button onclick="testMultipleUsers()">测试多人通话</button>
+        <button onclick="testAddUser()">添加用户</button>
+        <button onclick="testRemoveUser()">移除用户</button>
+        <button onclick="clearParticipants()">清空参与者</button>
+    </div>
+    
+    <div class="test-section">
+        <h2>👥 参与者列表</h2>
+        <div id="participantsList"></div>
+        <div class="debug-info" id="debugInfo"></div>
+    </div>
+    
+    <div class="test-section">
+        <h2>🔧 调试信息</h2>
+        <div id="debugOutput"></div>
+    </div>
+
+    <script>
+        // 模拟语音通话相关变量
+        let callParticipants = new Set();
+        let participants = [];
+        let currentUserId = 'user-123';
+        let currentUsername = '测试用户';
+
+        // 模拟参与者数据
+        participants = [
+            { userId: 'user-123', name: '测试用户', status: 'online' },
+            { userId: 'user-456', name: '其他用户', status: 'online' },
+            { userId: 'user-789', name: '第三个用户', status: 'online' },
+            { userId: 'user-999', name: '新用户', status: 'online' }
+        ];
+
+        // 更新参与者显示
+        function updateCallParticipants() {
+            const participantsList = document.getElementById('participantsList');
+            const debugInfo = document.getElementById('debugInfo');
+            
+            participantsList.innerHTML = '';
+            
+            // 添加当前用户
+            const currentUserDiv = document.createElement('div');
+            currentUserDiv.className = 'participant';
+            currentUserDiv.innerHTML = `
+                <div class="avatar">${currentUsername.charAt(0).toUpperCase()}</div>
+                <div class="participant-info">
+                    <div class="participant-name">${currentUsername} (我)</div>
+                    <div class="participant-status status-online">
+                        <i class="fas fa-microphone"></i> 在线
+                    </div>
+                </div>
+            `;
+            participantsList.appendChild(currentUserDiv);
+            
+            // 添加其他参与者
+            let otherParticipantsCount = 0;
+            callParticipants.forEach(participantId => {
+                if (participantId !== currentUserId) {
+                    // 首先尝试从参与者列表中找到
+                    let participant = participants.find(p => p.userId === participantId);
+                    
+                    // 如果找不到，创建一个临时的参与者对象
+                    if (!participant) {
+                        participant = {
+                            userId: participantId,
+                            name: `用户${participantId.slice(-4)}`, // 使用用户ID的后4位作为显示名
+                            status: 'online'
+                        };
+                    }
+                    
+                    const participantDiv = document.createElement('div');
+                    participantDiv.className = 'participant';
+                    participantDiv.innerHTML = `
+                        <div class="avatar">${participant.name.charAt(0).toUpperCase()}</div>
+                        <div class="participant-info">
+                            <div class="participant-name">${participant.name}</div>
+                            <div class="participant-status status-online">
+                                <i class="fas fa-microphone"></i> 在线
+                            </div>
+                        </div>
+                    `;
+                    participantsList.appendChild(participantDiv);
+                    otherParticipantsCount++;
+                }
+            });
+            
+            // 更新调试信息
+            debugInfo.innerHTML = `
+                <strong>调试信息:</strong><br>
+                callParticipants.size: ${callParticipants.size}<br>
+                callParticipants: ${Array.from(callParticipants).join(', ')}<br>
+                其他参与者数量: ${otherParticipantsCount}<br>
+                当前用户ID: ${currentUserId}
+            `;
+            
+            // 更新调试输出
+            updateDebugOutput();
+        }
+
+        function updateDebugOutput() {
+            const debugOutput = document.getElementById('debugOutput');
+            debugOutput.innerHTML = `
+                <strong>变量状态:</strong><br>
+                <pre>${JSON.stringify({
+                    callParticipantsSize: callParticipants.size,
+                    callParticipantsIds: Array.from(callParticipants),
+                    participantsArrayLength: participants.length,
+                    participantsIds: participants.map(p => p.userId),
+                    currentUserId: currentUserId
+                }, null, 2)}</pre>
+            `;
+        }
+
+        // 测试函数
+        function testSingleUser() {
+            console.log('🧪 测试单人通话');
+            callParticipants.clear();
+            callParticipants.add(currentUserId);
+            updateCallParticipants();
+        }
+
+        function testMultipleUsers() {
+            console.log('🧪 测试多人通话');
+            callParticipants.clear();
+            callParticipants.add(currentUserId);
+            callParticipants.add('user-456');
+            callParticipants.add('user-789');
+            updateCallParticipants();
+        }
+
+        function testAddUser() {
+            console.log('🧪 添加用户');
+            callParticipants.add('user-999');
+            updateCallParticipants();
+        }
+
+        function testRemoveUser() {
+            console.log('🧪 移除用户');
+            callParticipants.delete('user-456');
+            updateCallParticipants();
+        }
+
+        function clearParticipants() {
+            console.log('🧪 清空参与者');
+            callParticipants.clear();
+            updateCallParticipants();
+        }
+
+        // 初始化
+        updateCallParticipants();
+    </script>
+</body>
+</html> 

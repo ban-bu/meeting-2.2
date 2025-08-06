@@ -1,0 +1,302 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>创建者状态测试</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            background: #f5f5f5;
+        }
+        .test-section {
+            background: white;
+            padding: 20px;
+            margin: 20px 0;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .participant {
+            display: flex;
+            align-items: center;
+            padding: 10px;
+            margin: 5px 0;
+            background: #f8f9fa;
+            border-radius: 5px;
+        }
+        .avatar {
+            width: 40px;
+            height: 40px;
+            border-radius: 50%;
+            background: #007bff;
+            color: white;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin-right: 10px;
+            font-weight: bold;
+        }
+        .participant-info {
+            flex: 1;
+        }
+        .participant-name {
+            font-weight: bold;
+            margin-bottom: 2px;
+        }
+        .participant-status {
+            font-size: 12px;
+            color: #666;
+        }
+        .creator-tag {
+            background: #28a745;
+            color: white;
+            padding: 2px 6px;
+            border-radius: 3px;
+            font-size: 10px;
+            margin-left: 5px;
+        }
+        .creator-actions {
+            margin-top: 20px;
+            padding: 15px;
+            background: #fff3cd;
+            border: 1px solid #ffeaa7;
+            border-radius: 5px;
+        }
+        .btn-end-meeting {
+            background: #dc3545;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 5px;
+            cursor: pointer;
+        }
+        .btn-end-meeting:hover {
+            background: #c82333;
+        }
+        .creator-note {
+            font-size: 12px;
+            color: #856404;
+            margin-top: 5px;
+        }
+        .debug-info {
+            background: #f8f9fa;
+            padding: 10px;
+            border-radius: 5px;
+            font-family: monospace;
+            font-size: 12px;
+            margin: 10px 0;
+        }
+        button {
+            background: #007bff;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 5px;
+            cursor: pointer;
+            margin: 5px;
+        }
+        button:hover {
+            background: #0056b3;
+        }
+    </style>
+</head>
+<body>
+    <h1>🔍 创建者状态测试</h1>
+    
+    <div class="test-section">
+        <h2>📋 测试说明</h2>
+        <p>这个页面用于测试创建者标识和结束会议按钮的显示功能。</p>
+    </div>
+    
+    <div class="test-section">
+        <h2>🎮 测试控制</h2>
+        <button onclick="testCreator()">测试创建者状态</button>
+        <button onclick="testNonCreator()">测试非创建者状态</button>
+        <button onclick="testNoRoomInfo()">测试无房间信息</button>
+        <button onclick="checkRealStatus()">检查真实状态</button>
+    </div>
+    
+    <div class="test-section">
+        <h2>👥 参与者列表</h2>
+        <div id="participantsList"></div>
+        <div class="debug-info" id="debugInfo"></div>
+    </div>
+    
+    <div class="test-section">
+        <h2>🔧 调试信息</h2>
+        <div id="debugOutput"></div>
+    </div>
+
+    <script>
+        // 模拟变量
+        let participants = [];
+        let currentUserId = 'user-123';
+        let currentUsername = '测试用户';
+
+        // 模拟参与者数据
+        participants = [
+            { userId: 'user-123', name: '测试用户', status: 'online' },
+            { userId: 'user-456', name: '其他用户', status: 'online' },
+            { userId: 'user-789', name: '第三个用户', status: 'online' }
+        ];
+
+        // 模拟参与者渲染函数
+        function renderFilteredParticipants(filteredParticipants) {
+            const participantsList = document.getElementById('participantsList');
+            const debugInfo = document.getElementById('debugInfo');
+            
+            participantsList.innerHTML = '';
+            
+            if (filteredParticipants.length === 0) {
+                const emptyDiv = document.createElement('div');
+                emptyDiv.className = 'empty-participants';
+                emptyDiv.innerHTML = '<p>暂无在线成员</p>';
+                participantsList.appendChild(emptyDiv);
+                return;
+            }
+            
+            // 对参与者进行排序：当前用户第一，创建者第二，其他按原顺序
+            const sortedParticipants = [...filteredParticipants].sort((a, b) => {
+                const aIsCurrentUser = a.userId === currentUserId;
+                const bIsCurrentUser = b.userId === currentUserId;
+                const aIsCreator = window.currentRoomInfo && a.userId === window.currentRoomInfo.creatorId;
+                const bIsCreator = window.currentRoomInfo && b.userId === window.currentRoomInfo.creatorId;
+                
+                // 当前用户始终排在第一位
+                if (aIsCurrentUser && !bIsCurrentUser) return -1;
+                if (!aIsCurrentUser && bIsCurrentUser) return 1;
+                
+                // 如果当前用户就是创建者，直接保持顺序
+                if (aIsCurrentUser && bIsCurrentUser) return 0;
+                
+                // 在非当前用户中，创建者排在第二位
+                if (aIsCreator && !bIsCreator) return -1;
+                if (!aIsCreator && bIsCreator) return 1;
+                
+                // 其他按原顺序
+                return 0;
+            });
+            
+            sortedParticipants.forEach((participant, index) => {
+                const participantDiv = document.createElement('div');
+                participantDiv.className = 'participant';
+                
+                const initials = participant.name.charAt(0).toUpperCase();
+                const isCurrentUser = participant.userId === currentUserId;
+                const isCreator = window.currentRoomInfo && participant.userId === window.currentRoomInfo.creatorId;
+                
+                // 确定显示标签
+                let userTag = '';
+                if (isCurrentUser && isCreator) {
+                    userTag = '<span class="creator-tag">我·创建者</span>';
+                } else if (isCurrentUser) {
+                    userTag = '<span class="creator-tag">我</span>';
+                } else if (isCreator) {
+                    userTag = '<span class="creator-tag">创建者</span>';
+                }
+                
+                participantDiv.innerHTML = `
+                    <div class="avatar">${initials}</div>
+                    <div class="participant-info">
+                        <div class="participant-name">
+                            ${participant.name} ${userTag}
+                        </div>
+                        <div class="participant-status ${participant.status}">
+                            ${participant.status === 'online' ? '在线' : '离线'}
+                        </div>
+                    </div>
+                `;
+                
+                participantsList.appendChild(participantDiv);
+            });
+            
+            // 如果当前用户是创建者，在参与者列表下方添加结束会议按钮
+            if (window.isCreator) {
+                const endMeetingDiv = document.createElement('div');
+                endMeetingDiv.className = 'creator-actions';
+                endMeetingDiv.innerHTML = `
+                    <button id="endMeetingBtn" class="btn-end-meeting" onclick="endMeeting()">
+                        结束会议
+                    </button>
+                    <p class="creator-note">结束会议将清空所有聊天记录和文件</p>
+                `;
+                participantsList.appendChild(endMeetingDiv);
+            }
+            
+            // 更新调试信息
+            debugInfo.innerHTML = `
+                <strong>调试信息:</strong><br>
+                window.isCreator: ${window.isCreator}<br>
+                window.currentRoomInfo: ${JSON.stringify(window.currentRoomInfo)}<br>
+                currentUserId: ${currentUserId}<br>
+                creatorId: ${window.currentRoomInfo ? window.currentRoomInfo.creatorId : 'undefined'}<br>
+                参与者数量: ${filteredParticipants.length}
+            `;
+            
+            updateDebugOutput();
+        }
+
+        function updateDebugOutput() {
+            const debugOutput = document.getElementById('debugOutput');
+            debugOutput.innerHTML = `
+                <strong>变量状态:</strong><br>
+                <pre>${JSON.stringify({
+                    windowIsCreator: window.isCreator,
+                    windowCurrentRoomInfo: window.currentRoomInfo,
+                    currentUserId: currentUserId,
+                    creatorId: window.currentRoomInfo ? window.currentRoomInfo.creatorId : 'undefined',
+                    participantsCount: participants.length
+                }, null, 2)}</pre>
+            `;
+        }
+
+        // 测试函数
+        function testCreator() {
+            console.log('🧪 测试创建者状态');
+            window.isCreator = true;
+            window.currentRoomInfo = {
+                roomId: 'test-room',
+                creatorId: 'user-123',
+                createdAt: new Date()
+            };
+            renderFilteredParticipants(participants);
+        }
+
+        function testNonCreator() {
+            console.log('🧪 测试非创建者状态');
+            window.isCreator = false;
+            window.currentRoomInfo = {
+                roomId: 'test-room',
+                creatorId: 'user-456',
+                createdAt: new Date()
+            };
+            renderFilteredParticipants(participants);
+        }
+
+        function testNoRoomInfo() {
+            console.log('🧪 测试无房间信息');
+            window.isCreator = false;
+            window.currentRoomInfo = null;
+            renderFilteredParticipants(participants);
+        }
+
+        function checkRealStatus() {
+            console.log('🧪 检查真实状态');
+            console.log('window.isCreator:', window.isCreator);
+            console.log('window.currentRoomInfo:', window.currentRoomInfo);
+            console.log('window.realtimeClient:', window.realtimeClient);
+            updateDebugOutput();
+        }
+
+        function endMeeting() {
+            alert('结束会议功能测试');
+        }
+
+        // 初始化
+        updateDebugOutput();
+    </script>
+</body>
+</html> 
