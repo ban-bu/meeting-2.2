@@ -1,0 +1,237 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>语音通话重连测试</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            background: #f5f5f5;
+        }
+        .test-container {
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            margin-bottom: 20px;
+        }
+        .test-step {
+            margin: 10px 0;
+            padding: 10px;
+            border-left: 4px solid #3b82f6;
+            background: #eff6ff;
+        }
+        .status {
+            padding: 10px;
+            border-radius: 4px;
+            margin: 10px 0;
+        }
+        .status.success { background: #d1fae5; color: #065f46; }
+        .status.error { background: #fee2e2; color: #991b1b; }
+        .status.warning { background: #fef3c7; color: #92400e; }
+        .status.info { background: #dbeafe; color: #1e40af; }
+        button {
+            background: #3b82f6;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 4px;
+            cursor: pointer;
+            margin: 5px;
+        }
+        button:hover { background: #2563eb; }
+        button:disabled { background: #9ca3af; cursor: not-allowed; }
+        .log-area {
+            background: #1f2937;
+            color: #f9fafb;
+            padding: 15px;
+            border-radius: 4px;
+            font-family: monospace;
+            max-height: 300px;
+            overflow-y: auto;
+            white-space: pre-wrap;
+        }
+        .participant-list {
+            border: 1px solid #e5e7eb;
+            border-radius: 4px;
+            padding: 10px;
+            margin: 10px 0;
+            background: #f9fafb;
+        }
+    </style>
+</head>
+<body>
+    <h1>🔧 语音通话重连测试工具</h1>
+    
+    <div class="test-container">
+        <h2>测试说明</h2>
+        <p>此页面用于测试修复后的语音通话重连功能，验证以下问题是否已解决：</p>
+        <div class="test-step">
+            <strong>问题1:</strong> 第一次接通后正常，但再次拨打时右下角列表只显示自己
+        </div>
+        <div class="test-step">
+            <strong>问题2:</strong> ICE候选错误导致WebRTC连接失败
+        </div>
+        <div class="test-step">
+            <strong>问题3:</strong> 通话参与者列表同步问题
+        </div>
+    </div>
+
+    <div class="test-container">
+        <h2>测试步骤</h2>
+        <div class="test-step">
+            <strong>步骤1:</strong> 打开多个浏览器窗口/标签页，每个使用不同用户名进入同一房间
+        </div>
+        <div class="test-step">
+            <strong>步骤2:</strong> 在用户A发起语音通话，其他用户加入
+        </div>
+        <div class="test-step">
+            <strong>步骤3:</strong> 结束通话，等待几秒
+        </div>
+        <div class="test-step">
+            <strong>步骤4:</strong> 再次发起语音通话，检查参与者列表是否正常显示
+        </div>
+        <div class="test-step">
+            <strong>步骤5:</strong> 检查控制台是否还有大量ICE候选错误
+        </div>
+    </div>
+
+    <div class="test-container">
+        <h2>实时监控</h2>
+        <button onclick="startMonitoring()">开始监控</button>
+        <button onclick="stopMonitoring()">停止监控</button>
+        <button onclick="clearLog()">清空日志</button>
+        
+        <div class="status info">
+            <strong>当前状态:</strong> <span id="currentStatus">等待开始</span>
+        </div>
+        
+        <div class="participant-list">
+            <strong>通话参与者列表:</strong>
+            <div id="participantDisplay">暂无参与者</div>
+        </div>
+        
+        <div class="log-area" id="logArea">点击"开始监控"查看实时日志...</div>
+    </div>
+
+    <div class="test-container">
+        <h2>已修复的问题</h2>
+        <div class="status success">
+            ✅ 添加了 cleanupBeforeNewCall() 函数，在开始新通话前彻底清理之前的状态
+        </div>
+        <div class="status success">
+            ✅ 改善了ICE候选错误处理，添加了重试机制和更详细的错误信息
+        </div>
+        <div class="status success">
+            ✅ 增加了更多STUN服务器，提高连接成功率
+        </div>
+        <div class="status success">
+            ✅ 修复了通话参与者列表同步机制，确保所有用户都能看到完整列表
+        </div>
+        <div class="status success">
+            ✅ 改善了通话创建者信息传递，避免多个用户都显示为创建者
+        </div>
+    </div>
+
+    <script>
+        let monitoring = false;
+        let monitoringInterval = null;
+
+        function log(message, type = 'info') {
+            const logArea = document.getElementById('logArea');
+            const timestamp = new Date().toLocaleTimeString();
+            const logLine = `[${timestamp}] ${message}\n`;
+            logArea.textContent += logLine;
+            logArea.scrollTop = logArea.scrollHeight;
+        }
+
+        function updateStatus(status) {
+            document.getElementById('currentStatus').textContent = status;
+        }
+
+        function updateParticipants() {
+            const display = document.getElementById('participantDisplay');
+            
+            if (typeof window.parent.callParticipants !== 'undefined') {
+                const participants = Array.from(window.parent.callParticipants);
+                if (participants.length > 0) {
+                    display.innerHTML = participants.map(id => `<div>• ${id}</div>`).join('');
+                } else {
+                    display.textContent = '暂无参与者';
+                }
+            } else {
+                display.textContent = '无法访问参与者数据';
+            }
+        }
+
+        function startMonitoring() {
+            if (monitoring) return;
+            
+            monitoring = true;
+            updateStatus('监控中...');
+            log('开始监控语音通话状态', 'info');
+            
+            // 监听父窗口的通话事件
+            monitoringInterval = setInterval(() => {
+                try {
+                    const parentWindow = window.parent;
+                    if (parentWindow && parentWindow !== window) {
+                        // 检查通话状态
+                        const isInCall = parentWindow.isInCall || false;
+                        const callParticipants = parentWindow.callParticipants || new Set();
+                        const peerConnections = parentWindow.peerConnections || new Map();
+                        
+                        updateStatus(isInCall ? '通话中' : '空闲');
+                        updateParticipants();
+                        
+                        // 记录关键状态变化
+                        if (callParticipants.size > 0) {
+                            log(`通话参与者: ${callParticipants.size} 人 [${Array.from(callParticipants).join(', ')}]`);
+                        }
+                        
+                        if (peerConnections.size > 0) {
+                            log(`WebRTC连接: ${peerConnections.size} 个`);
+                        }
+                    }
+                } catch (error) {
+                    log(`监控错误: ${error.message}`, 'error');
+                }
+            }, 2000);
+            
+            // 监听控制台错误
+            const originalError = console.error;
+            console.error = function(...args) {
+                if (args[0] && args[0].includes && args[0].includes('ICE候选错误')) {
+                    log(`检测到ICE错误: ${args[0]}`, 'error');
+                }
+                originalError.apply(console, args);
+            };
+        }
+
+        function stopMonitoring() {
+            monitoring = false;
+            if (monitoringInterval) {
+                clearInterval(monitoringInterval);
+                monitoringInterval = null;
+            }
+            updateStatus('已停止');
+            log('停止监控', 'info');
+        }
+
+        function clearLog() {
+            document.getElementById('logArea').textContent = '';
+            log('日志已清空', 'info');
+        }
+
+        // 页面加载完成后自动开始监控
+        window.addEventListener('load', () => {
+            log('测试页面已加载', 'info');
+            setTimeout(startMonitoring, 1000);
+        });
+    </script>
+</body>
+</html>

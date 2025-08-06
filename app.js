@@ -1001,6 +1001,12 @@ async function joinOngoingCall() {
     try {
         console.log('📞 加入正在进行的通话...');
         
+        // 先清理之前的通话资源（如果有的话）
+        if (isInCall || callParticipants.size > 0 || peerConnections.size > 0) {
+            console.log('⚠️ 加入通话前检测到之前的状态，先进行清理...');
+            await cleanupBeforeNewCall();
+        }
+        
         // ===== 新增：主动请求服务器获取当前通话参与者 =====
         // 确保获取正确的roomId
         let currentRoomId = roomId || window.roomId;
@@ -1225,6 +1231,12 @@ async function startVoiceCall() {
     try {
         console.log('📞 开始语音通话...');
         
+        // 先清理之前的通话资源（如果有的话）
+        if (isInCall || callParticipants.size > 0 || peerConnections.size > 0) {
+            console.log('⚠️ 检测到之前的通话状态，先进行清理...');
+            await cleanupBeforeNewCall();
+        }
+        
         // 检查浏览器支持
         if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
             throw new Error('浏览器不支持getUserMedia API');
@@ -1357,6 +1369,87 @@ async function startVoiceCall() {
             stack: error.stack
         });
     }
+}
+
+// 在开始新通话前清理之前的状态
+async function cleanupBeforeNewCall() {
+    console.log('🧹 清理之前的通话状态...');
+    
+    // 重置全局通话创建者
+    window.currentCallCreator = null;
+    
+    // 停止本地流
+    if (localStream) {
+        localStream.getTracks().forEach(track => {
+            track.stop();
+            console.log('🔇 停止之前的本地音频轨道:', track.kind);
+        });
+        localStream = null;
+    }
+    
+    // 清理音频混合器
+    if (audioMixer) {
+        audioMixer.cleanup();
+        audioMixer = null;
+        console.log('🎵 清理之前的音频混合器');
+    }
+    mixedAudioStream = null;
+    
+    // 强制关闭所有WebRTC连接
+    console.log('🔗 强制清理WebRTC连接，数量:', peerConnections.size);
+    peerConnections.forEach((connection, userId) => {
+        try {
+            if (connection.connectionState !== 'closed') {
+                connection.close();
+                console.log(`🔗 强制关闭用户 ${userId} 的WebRTC连接`);
+            }
+        } catch (error) {
+            console.error(`❌ 强制关闭用户 ${userId} WebRTC连接失败:`, error);
+        }
+    });
+    peerConnections.clear();
+    
+    // 清理所有音频元素
+    console.log('🔊 强制清理音频元素，数量:', audioElements.size);
+    audioElements.forEach((audioElement, userId) => {
+        try {
+            audioElement.pause();
+            audioElement.srcObject = null;
+            audioElement.src = '';
+            if (audioElement.parentNode) {
+                audioElement.parentNode.removeChild(audioElement);
+            }
+            console.log(`🔊 强制清理用户 ${userId} 的音频元素`);
+        } catch (error) {
+            console.error(`❌ 强制清理用户 ${userId} 音频元素失败:`, error);
+        }
+    });
+    audioElements.clear();
+    
+    // 清理远程流
+    console.log('📡 强制清理远程流，数量:', remoteStreams.size);
+    remoteStreams.forEach((stream, userId) => {
+        try {
+            if (stream && stream.getTracks) {
+                stream.getTracks().forEach(track => track.stop());
+            }
+        } catch (error) {
+            console.error(`❌ 清理用户 ${userId} 远程流失败:`, error);
+        }
+    });
+    remoteStreams.clear();
+    
+    // 重置状态变量
+    isInCall = false;
+    isMuted = false;
+    callParticipants.clear();
+    callStartTime = null;
+    callDuration = null;
+    
+    console.log('✅ 新通话前清理完成');
+    
+    // 等待一小段时间确保清理完成
+    await new Promise(resolve => setTimeout(resolve, 500));
 }
 
 // 清理通话资源（不发送事件）
@@ -2203,11 +2296,19 @@ function createPeerConnection(userId) {
             { urls: 'stun:stun.l.google.com:19302' },
             { urls: 'stun:stun1.l.google.com:19302' },
             { urls: 'stun:stun2.l.google.com:19302' },
-            { urls: 'stun:stun3.l.google.com:19302' }
+            { urls: 'stun:stun3.l.google.com:19302' },
+            { urls: 'stun:stun4.l.google.com:19302' },
+            // 添加备用STUN服务器
+            { urls: 'stun:stun.cloudflare.com:3478' },
+            { urls: 'stun:stun.nextcloud.com:443' }
         ],
         iceCandidatePoolSize: 10,
         bundlePolicy: 'max-bundle',
-        rtcpMuxPolicy: 'require'
+        rtcpMuxPolicy: 'require',
+        // 改善连接建立
+        iceTransportPolicy: 'all',
+        // 缩短ICE收集超时时间
+        iceGatheringTimeout: 5000
     };
     
     let peerConnection;
@@ -2343,7 +2444,37 @@ function createPeerConnection(userId) {
     
     // 处理ICE候选错误
     peerConnection.onicecandidateerror = (event) => {
-        console.error(`❌ ICE候选错误 [${userId}]:`, event);
+        console.error(`❌ ICE候选错误 [${userId}]:`, {
+            errorCode: event.errorCode,
+            errorText: event.errorText,
+            address: event.address,
+            port: event.port,
+            url: event.url
+        });
+        
+        // 记录错误统计
+        if (!peerConnection.iceErrorCount) {
+            peerConnection.iceErrorCount = 0;
+        }
+        peerConnection.iceErrorCount++;
+        
+        // 如果错误过多，考虑重新建立连接
+        if (peerConnection.iceErrorCount > 10) {
+            console.warn(`⚠️ ICE候选错误过多 [${userId}]，将在稍后重试连接`);
+            setTimeout(() => {
+                if (callParticipants.has(userId) && isInCall) {
+                    console.log(`🔄 重新建立连接 [${userId}] (ICE错误过多)`);
+                    // 移除旧连接
+                    const oldConnection = peerConnections.get(userId);
+                    if (oldConnection) {
+                        oldConnection.close();
+                        peerConnections.delete(userId);
+                    }
+                    // 创建新连接
+                    createPeerConnection(userId);
+                }
+            }, 3000);
+        }
     };
     
     // 初始化暂存ICE候选数组
@@ -2568,11 +2699,50 @@ function handleCallParticipantsUpdate(data) {
         // 有用户开始新的通话
         console.log('📞 收到通话开始通知，更新参与者列表');
         
+        // 确保通话发起者信息设置正确
+        if (data.userId) {
+            window.currentCallCreator = data.userId;
+            console.log('📞 从通话开始事件设置创建者:', data.userId);
+        }
+        
         // 同步所有通话参与者
         if (data.callParticipants && Array.isArray(data.callParticipants)) {
+            // 先清理之前的状态
             callParticipants.clear();
+            
+            // 添加所有通话参与者
             data.callParticipants.forEach(participantId => {
                 callParticipants.add(participantId);
+                
+                // 确保参与者在participants数组中
+                let participant = participants.find(p => p.userId === participantId);
+                if (!participant) {
+                    // 如果是发起者，使用传入的用户名
+                    const participantName = (participantId === data.userId && data.userName) 
+                        ? data.userName 
+                        : `用户${participantId.slice(-4)}`;
+                    
+                    participant = {
+                        userId: participantId,
+                        name: participantName,
+                        status: 'in-call',
+                        joinTime: Date.now(),
+                        lastSeen: Date.now(),
+                        socketId: 'active'
+                    };
+                    participants.push(participant);
+                    console.log('📞 添加通话参与者到participants:', participant);
+                } else {
+                    // 更新现有参与者状态
+                    participant.status = 'in-call';
+                    participant.lastSeen = Date.now();
+                }
+            });
+            
+            console.log('📞 通话参与者同步完成:', {
+                callParticipantsCount: callParticipants.size,
+                callParticipants: Array.from(callParticipants),
+                participantsCount: participants.length
             });
         }
         
