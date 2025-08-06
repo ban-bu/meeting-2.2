@@ -991,6 +991,36 @@ async function joinOngoingCall() {
     try {
         console.log('📞 加入正在进行的通话...');
         
+        // ===== 新增：主动请求服务器获取当前通话参与者 =====
+        if (typeof roomId !== 'undefined' && roomId) {
+            try {
+                const resp = await fetch(`/api/rooms/${roomId}/participants`);
+                if (resp.ok) {
+                    const data = await resp.json();
+                    if (data && Array.isArray(data.participants)) {
+                        // 只保留 status 为 in-call 或 calling 的用户
+                        const inCallUsers = data.participants.filter(p => p.status === 'in-call' || p.status === 'calling');
+                        // 更新本地 participants
+                        participants = data.participants;
+                        // 更新 callParticipants
+                        callParticipants.clear();
+                        callParticipants.add(currentUserId);
+                        inCallUsers.forEach(p => {
+                            if (p.userId !== currentUserId) {
+                                callParticipants.add(p.userId);
+                            }
+                        });
+                        console.log('✅ 已同步服务器通话参与者:', Array.from(callParticipants));
+                    }
+                } else {
+                    console.warn('⚠️ 获取通话参与者失败:', resp.status);
+                }
+            } catch (err) {
+                console.warn('⚠️ 获取通话参与者异常:', err);
+            }
+        }
+        // ===== 新增逻辑结束 =====
+        
         // 检查浏览器支持
         if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
             throw new Error('浏览器不支持getUserMedia API');
@@ -1030,13 +1060,18 @@ async function joinOngoingCall() {
         
         isInCall = true;
         callStartTime = Date.now();
+        callParticipants.clear(); // 清空现有参与者列表
         callParticipants.add(currentUserId);
         
-        // 添加已经在通话中的用户
+        // 获取所有在通话中的参与者
         const existingCallParticipants = getCallParticipants();
+        console.log('📞 现有通话参与者:', existingCallParticipants);
+        
+        // 添加所有已经在通话中的用户
         existingCallParticipants.forEach(p => {
             if (p.userId !== currentUserId) {
                 callParticipants.add(p.userId);
+                console.log('📞 添加通话参与者:', p.userId, p.name);
             }
         });
         
@@ -1060,7 +1095,7 @@ async function joinOngoingCall() {
         }
         
         showToast('已加入语音通话', 'success');
-        console.log('✅ 已加入通话');
+        console.log('✅ 已加入通话，当前参与者:', Array.from(callParticipants));
         
         // 更新转录按钮状态
         if (typeof onCallStatusChange === 'function') {
@@ -1766,6 +1801,14 @@ function updateCallParticipants() {
     if (isInCall) {
         showCallStatusIndicator();
     }
+    
+    // 添加调试信息，显示所有通话参与者
+    console.log('📞 通话参与者列表更新完成:', {
+        totalParticipants: callParticipants.size,
+        participants: Array.from(callParticipants),
+        currentUser: currentUserId,
+        otherParticipants: otherParticipantsCount
+    });
 }
 
 // 开始通话计时
@@ -1943,6 +1986,7 @@ function handleCallInvite(data) {
 function handleCallAccept(data) {
     console.log('📞 用户接受通话:', data);
     
+    // 添加新加入的用户到通话参与者列表
     callParticipants.add(data.userId);
     
     // 确保当前用户也在参与者列表中
@@ -1960,6 +2004,19 @@ function handleCallAccept(data) {
             lastSeen: Date.now()
         });
     }
+    
+    // 更新通话状态
+    const participant = participants.find(p => p.userId === data.userId);
+    if (participant) {
+        participant.status = 'in-call';
+    }
+    
+    console.log('📞 通话参与者更新:', {
+        newUserId: data.userId,
+        newUserName: data.userName,
+        callParticipantsSize: callParticipants.size,
+        callParticipants: Array.from(callParticipants)
+    });
     
     updateCallUI();
     
