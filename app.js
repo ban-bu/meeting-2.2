@@ -1158,6 +1158,17 @@ async function joinOngoingCall() {
         // 同步参与者数据
         syncCallParticipants();
         
+        // 通知其他用户有新的通话开始，更新他们的参与者列表
+        if (isRealtimeEnabled && window.realtimeClient) {
+            window.realtimeClient.sendCallParticipantsUpdate({
+                roomId,
+                callParticipants: Array.from(callParticipants),
+                action: 'start',
+                userId: currentUserId,
+                userName: currentUsername
+            });
+        }
+        
         // 通知其他用户自己加入了通话
         console.log('📞 通知其他用户加入通话，roomId:', currentRoomId, 'currentUserId:', currentUserId, 'currentUsername:', currentUsername);
         if (isRealtimeEnabled && window.realtimeClient) {
@@ -1267,6 +1278,17 @@ async function startVoiceCall() {
         
         // 同步参与者数据
         syncCallParticipants();
+        
+        // 通知其他用户有新的通话开始，更新他们的参与者列表
+        if (isRealtimeEnabled && window.realtimeClient) {
+            window.realtimeClient.sendCallParticipantsUpdate({
+                roomId: currentRoomId || roomId,
+                callParticipants: Array.from(callParticipants),
+                action: 'start',
+                userId: currentUserId,
+                userName: currentUsername
+            });
+        }
         
         // 通知其他用户加入通话
         // 确保获取正确的roomId
@@ -2033,13 +2055,15 @@ function updateCallParticipants() {
     
     participantsList.innerHTML = '';
     
-    // 检查当前用户是否是通话创建者
-    const isCurrentUserCreator = window.currentCallCreator === currentUserId;
+    // 检查当前用户是否是通话发起者（从消息中获取真正的创建者）
+    const callStatusMessage = messages.find(msg => msg.isCallStatus && !msg.isCallEnd);
+    const realCallCreator = callStatusMessage ? callStatusMessage.callCreator : window.currentCallCreator;
+    const isCurrentUserCreator = realCallCreator === currentUserId;
     
     // 添加当前用户
     const currentUserDiv = document.createElement('div');
     currentUserDiv.className = 'call-participant';
-    const creatorBadge = isCurrentUserCreator ? ' <span class="creator-badge">创建者</span>' : '';
+    const creatorBadge = isCurrentUserCreator ? ' <span class="creator-badge">发起者</span>' : '';
     currentUserDiv.innerHTML = `
         <div class="call-participant-avatar">${currentUsername.charAt(0).toUpperCase()}</div>
         <div class="call-participant-info">
@@ -2079,9 +2103,9 @@ function updateCallParticipants() {
             const participantDiv = document.createElement('div');
             participantDiv.className = 'call-participant';
             
-            // 检查是否是通话创建者
-            const isParticipantCreator = window.currentCallCreator === participantId;
-            const creatorBadge = isParticipantCreator ? ' <span class="creator-badge">创建者</span>' : '';
+            // 检查是否是通话发起者（使用真正的创建者ID）
+            const isParticipantCreator = realCallCreator === participantId;
+            const creatorBadge = isParticipantCreator ? ' <span class="creator-badge">发起者</span>' : '';
             
             participantDiv.innerHTML = `
                 <div class="call-participant-avatar">${participant.name.charAt(0).toUpperCase()}</div>
@@ -2451,6 +2475,18 @@ function handleCallAccept(data) {
         participantsCount: participants.length
     });
     
+    // 通知所有其他用户更新通话参与者列表
+    if (isRealtimeEnabled && window.realtimeClient) {
+        // 发送通话参与者更新事件
+        window.realtimeClient.sendCallParticipantsUpdate({
+            roomId,
+            callParticipants: Array.from(callParticipants),
+            action: 'join',
+            userId: data.userId,
+            userName: data.userName
+        });
+    }
+    
     // 强制更新UI
     updateCallParticipants();
     updateCallUI();
@@ -2477,12 +2513,96 @@ function handleCallAccept(data) {
         });
 }
 
+// 处理通话参与者更新
+function handleCallParticipantsUpdate(data) {
+    console.log('📞 处理通话参与者更新:', data);
+    
+    if (data.action === 'join') {
+        // 有新用户加入通话
+        callParticipants.add(data.userId);
+        
+        // 确保参与者信息在participants数组中
+        let participant = participants.find(p => p.userId === data.userId);
+        if (!participant) {
+            participant = {
+                userId: data.userId,
+                name: data.userName || `用户${data.userId.slice(-4)}`,
+                status: 'in-call',
+                joinTime: Date.now(),
+                lastSeen: Date.now(),
+                socketId: 'active'
+            };
+            participants.push(participant);
+            console.log('📞 添加新参与者到本地列表:', participant);
+        } else {
+            // 更新现有参与者状态
+            participant.status = 'in-call';
+            participant.lastSeen = Date.now();
+        }
+        
+        console.log('📞 通话参与者列表已更新:', {
+            callParticipantsSize: callParticipants.size,
+            callParticipants: Array.from(callParticipants)
+        });
+        
+        // 强制更新UI
+        updateCallParticipants();
+        updateCallUI();
+        renderParticipants();
+        
+    } else if (data.action === 'leave') {
+        // 有用户离开通话
+        callParticipants.delete(data.userId);
+        
+        // 更新参与者状态
+        const participant = participants.find(p => p.userId === data.userId);
+        if (participant) {
+            participant.status = 'online';
+        }
+        
+        // 强制更新UI
+        updateCallParticipants();
+        updateCallUI();
+        renderParticipants();
+    } else if (data.action === 'start') {
+        // 有用户开始新的通话
+        console.log('📞 收到通话开始通知，更新参与者列表');
+        
+        // 同步所有通话参与者
+        if (data.callParticipants && Array.isArray(data.callParticipants)) {
+            callParticipants.clear();
+            data.callParticipants.forEach(participantId => {
+                callParticipants.add(participantId);
+            });
+        }
+        
+        // 强制更新UI，确保通话面板显示
+        if (!isInCall) {
+            showCallPanel();
+        }
+        updateCallParticipants();
+        updateCallUI();
+        updateCallActions();
+        renderParticipants();
+    }
+}
+
 // 处理通话拒绝
 function handleCallReject(data) {
     console.log('📞 用户拒绝通话:', data);
     
     // 只从通话参与者列表中移除，但不影响重新加入的能力
     callParticipants.delete(data.userId);
+    
+    // 更新参与者状态为在线（但不在通话中）
+    const participant = participants.find(p => p.userId === data.userId);
+    if (participant) {
+        participant.status = 'online';
+    }
+    
+    // 更新UI，但保持通话状态消息可见
+    updateCallParticipants();
+    updateCallUI();
     
     // 清理该用户的WebRTC连接和音频元素
     const audioElement = audioElements.get(data.userId);
@@ -3063,15 +3183,16 @@ function setupRealtimeClient() {
             // 特殊处理通话状态消息
             if (message.isCallStatus || message.isCallEnd) {
                 // 检查是否已存在相同的通话状态消息（防止重复）
+                // 但要允许不同用户发起的通话状态消息
                 const existingMessage = messages.find(msg => 
                     msg.isCallStatus === message.isCallStatus && 
                     msg.isCallEnd === message.isCallEnd &&
-                    msg.callId === message.callId &&
+                    msg.callCreator === message.callCreator &&
                     Math.abs((new Date(msg.timestamp) - new Date(message.timestamp))) < 5000
                 );
                 
                 if (existingMessage) {
-                    console.log('跳过重复的通话状态消息');
+                    console.log('📞 跳过重复的通话状态消息:', message.text);
                     return;
                 }
                 
@@ -3367,6 +3488,11 @@ function setupRealtimeClient() {
         onMuteStatus: (data) => {
             console.log('收到静音状态:', data);
             handleMuteStatus(data);
+        },
+        
+        onCallParticipantsUpdate: (data) => {
+            console.log('📞 收到通话参与者更新:', data);
+            handleCallParticipantsUpdate(data);
         },
         
         // 转录事件处理
@@ -3914,8 +4040,8 @@ function renderMessage(message) {
         `;
         
         // 检查当前用户是否已在通话中，决定是否显示加入按钮
-        // 修复逻辑：只要用户不在通话中，就显示加入按钮（除非是通话创建者）
-        const isCallCreator = message.callCreator === currentUserId || window.currentCallCreator === currentUserId;
+        // 修复逻辑：只要用户不在通话中且不是发起者，就显示加入按钮
+        const isCallCreator = message.callCreator === currentUserId;
         const showJoinButton = !isInCall && !isCallCreator;
         
         messageDiv.innerHTML = `

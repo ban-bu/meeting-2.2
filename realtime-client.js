@@ -461,6 +461,12 @@ class RealtimeClient {
             }
         });
         
+        this.socket.on('callParticipantsUpdate', (data) => {
+            if (this.onCallParticipantsUpdate) {
+                this.onCallParticipantsUpdate(data);
+            }
+        });
+        
         // 转录事件
         this.socket.on('transcriptionStatusChange', (data) => {
             console.log('🔧 realtime-client 收到 transcriptionStatusChange:', data);
@@ -648,6 +654,15 @@ class RealtimeClient {
     sendCallReject(data) {
         if (this.socket && this.isConnected) {
             this.socket.emit('callReject', data);
+            return true;
+        }
+        return false;
+    }
+    
+    sendCallParticipantsUpdate(data) {
+        if (this.socket && this.isConnected) {
+            this.socket.emit('callParticipantsUpdate', data);
+            console.log('📞 发送通话参与者更新:', data);
             return true;
         }
         return false;
