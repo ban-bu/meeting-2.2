@@ -46,15 +46,15 @@ class RealtimeClient {
         
         if (hostname === 'localhost' || hostname === '127.0.0.1') {
             // 本地开发环境
-            if (port === '8080' || port === '3000') {
-                // 如果前端运行在8080或3000端口，后端运行在3001
+            if (port === '8080' || port === '3000' || port === '8000') {
+                // 如果前端运行在8080、3000或8000端口，后端运行在3001
                 return 'http://localhost:3001';
             } else if (port === '3001') {
                 // 如果前端运行在3001端口，使用当前域名（统一部署）
                 return `${protocol}//${hostname}${port ? ':' + port : ''}`;
             } else {
-                // 如果是统一部署，使用当前域名
-                return `${protocol}//${hostname}${port ? ':' + port : ''}`;
+                // 其他端口，默认连接到3001
+                return 'http://localhost:3001';
             }
         } else if (hostname.includes('railway.app') || hostname.includes('up.railway.app')) {
             // Railway环境 - 使用当前域名，因为前后端部署在同一个服务
@@ -219,21 +219,18 @@ class RealtimeClient {
         
         // 优化连接配置
         const socketConfig = {
-            timeout: 15000, // 减少超时时间到15秒
+            timeout: 30000, // 增加超时时间到30秒
             reconnection: false, // 禁用自动重连，使用自定义重连逻辑
             reconnectionAttempts: 0,
             reconnectionDelay: 0,
             forceNew: true, // 强制创建新连接
-            upgrade: true,
-            rememberUpgrade: false,
-            // 添加连接优化选项
             autoConnect: true,
-            transports: ['polling', 'websocket'], // Railway环境优先使用polling
-            upgrade: true,
-            rememberUpgrade: true,
-            // 修复Railway环境连接问题
+            // 修复本地环境连接问题 - 只使用polling
+            transports: ['polling'],
+            upgrade: false, // 禁用升级避免连接问题
+            rememberUpgrade: false,
             path: '/socket.io/',
-            withCredentials: true,
+            withCredentials: false, // 本地环境不需要凭证
             extraHeaders: {
                 'X-Requested-With': 'XMLHttpRequest'
             }
@@ -243,11 +240,14 @@ class RealtimeClient {
             // Railway环境优化：使用polling优先，避免WebSocket帧头问题
             socketConfig.transports = ['polling', 'websocket'];
             socketConfig.upgrade = true; // 允许升级到WebSocket
+            socketConfig.withCredentials = true;
             console.log('🚂 Railway环境：使用polling优先的传输方式');
         } else {
-            // 其他环境使用WebSocket优先
-            socketConfig.transports = ['websocket', 'polling'];
-            console.log('🌐 标准环境：使用WebSocket优先的传输方式');
+            // 本地环境只使用polling避免连接问题
+            socketConfig.transports = ['polling'];
+            socketConfig.upgrade = false;
+            socketConfig.withCredentials = false;
+            console.log('🌐 本地环境：使用polling传输方式');
         }
         
         this.socket = io(this.serverUrl, socketConfig);

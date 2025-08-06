@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>清除缓存</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 600px;
+            margin: 50px auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            background: white;
+            padding: 30px;
+            border-radius: 10px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            text-align: center;
+        }
+        .btn {
+            background: #007bff;
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 16px;
+            margin: 10px;
+        }
+        .btn:hover {
+            background: #0056b3;
+        }
+        .success {
+            color: #28a745;
+            margin-top: 20px;
+            font-weight: bold;
+        }
+        .info {
+            color: #6c757d;
+            margin: 20px 0;
+            line-height: 1.6;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🧹 清除缓存工具</h1>
+        <div class="info">
+            点击下面的按钮清除浏览器缓存和本地存储，确保测试环境干净。
+        </div>
+        
+        <button class="btn" onclick="clearAllCache()">清除所有缓存</button>
+        <button class="btn" onclick="clearLocalStorage()">清除本地存储</button>
+        <button class="btn" onclick="clearSessionStorage()">清除会话存储</button>
+        
+        <div id="result"></div>
+        
+        <div class="info">
+            <strong>手动清除步骤：</strong><br>
+            1. 按 Cmd+Shift+R (Mac) 或 Ctrl+Shift+R (Windows) 强制刷新<br>
+            2. 打开开发者工具 (F12)<br>
+            3. 右键点击刷新按钮，选择"清空缓存并硬性重新加载"<br>
+            4. 在 Application/Storage 标签页中清除所有存储
+        </div>
+    </div>
+
+    <script>
+        function clearAllCache() {
+            try {
+                // 清除本地存储
+                localStorage.clear();
+                sessionStorage.clear();
+                
+                // 清除 IndexedDB
+                if ('indexedDB' in window) {
+                    indexedDB.databases().then(databases => {
+                        databases.forEach(db => {
+                            indexedDB.deleteDatabase(db.name);
+                        });
+                    });
+                }
+                
+                // 清除 Service Worker 缓存
+                if ('caches' in window) {
+                    caches.keys().then(names => {
+                        names.forEach(name => {
+                            caches.delete(name);
+                        });
+                    });
+                }
+                
+                showResult('✅ 所有缓存已清除！请手动刷新页面。', 'success');
+                
+                // 3秒后自动刷新
+                setTimeout(() => {
+                    window.location.reload(true);
+                }, 3000);
+                
+            } catch (error) {
+                showResult('❌ 清除缓存时出错: ' + error.message, 'error');
+            }
+        }
+        
+        function clearLocalStorage() {
+            try {
+                localStorage.clear();
+                showResult('✅ 本地存储已清除！', 'success');
+            } catch (error) {
+                showResult('❌ 清除本地存储时出错: ' + error.message, 'error');
+            }
+        }
+        
+        function clearSessionStorage() {
+            try {
+                sessionStorage.clear();
+                showResult('✅ 会话存储已清除！', 'success');
+            } catch (error) {
+                showResult('❌ 清除会话存储时出错: ' + error.message, 'error');
+            }
+        }
+        
+        function showResult(message, type) {
+            const result = document.getElementById('result');
+            result.innerHTML = `<div class="${type}">${message}</div>`;
+        }
+        
+        // 页面加载时显示当前存储状态
+        window.onload = function() {
+            const localStorageSize = JSON.stringify(localStorage).length;
+            const sessionStorageSize = JSON.stringify(sessionStorage).length;
+            
+            showResult(`
+                📊 当前存储状态：<br>
+                本地存储: ${localStorageSize} 字符<br>
+                会话存储: ${sessionStorageSize} 字符
+            `, 'info');
+        };
+    </script>
+</body>
+</html>

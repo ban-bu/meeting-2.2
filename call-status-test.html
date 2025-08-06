@@ -1,0 +1,249 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>通话状态消息同步测试</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        .test-section {
+            background: white;
+            padding: 20px;
+            margin: 20px 0;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .test-button {
+            background: #007bff;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 5px;
+            cursor: pointer;
+            margin: 5px;
+        }
+        .test-button:hover {
+            background: #0056b3;
+        }
+        .log-area {
+            background: #f8f9fa;
+            border: 1px solid #dee2e6;
+            border-radius: 4px;
+            padding: 10px;
+            height: 200px;
+            overflow-y: auto;
+            font-family: monospace;
+            font-size: 12px;
+        }
+        .message-preview {
+            background: #e9ecef;
+            border-left: 4px solid #007bff;
+            padding: 10px;
+            margin: 10px 0;
+        }
+        .call-status-message {
+            background: #fff3cd;
+            border-left: 4px solid #ffc107;
+            padding: 15px;
+            margin: 10px 0;
+            border-radius: 4px;
+        }
+        .join-button {
+            background: #28a745;
+            color: white;
+            border: none;
+            padding: 8px 16px;
+            border-radius: 4px;
+            cursor: pointer;
+            margin-top: 10px;
+        }
+    </style>
+</head>
+<body>
+    <h1>🔍 通话状态消息同步测试</h1>
+    
+    <div class="test-section">
+        <h2>📋 测试说明</h2>
+        <p>这个页面用于测试通话状态消息是否能正确同步给其他参与者。</p>
+        <p><strong>测试步骤：</strong></p>
+        <ol>
+            <li>在一个浏览器窗口中发起语音通话</li>
+            <li>在另一个浏览器窗口中观察是否显示通话状态消息</li>
+            <li>检查是否显示"加入通话"按钮</li>
+        </ol>
+    </div>
+
+    <div class="test-section">
+        <h2>🧪 模拟测试</h2>
+        <button class="test-button" onclick="simulateCallStatusMessage()">模拟通话状态消息</button>
+        <button class="test-button" onclick="simulateCallEndMessage()">模拟通话结束消息</button>
+        <button class="test-button" onclick="clearMessages()">清空消息</button>
+        
+        <div id="messageContainer" style="margin-top: 20px;">
+            <!-- 消息将在这里显示 -->
+        </div>
+    </div>
+
+    <div class="test-section">
+        <h2>📊 消息格式预览</h2>
+        <h3>通话状态消息格式：</h3>
+        <div class="message-preview">
+            <pre id="callStatusFormat"></pre>
+        </div>
+        
+        <h3>通话结束消息格式：</h3>
+        <div class="message-preview">
+            <pre id="callEndFormat"></pre>
+        </div>
+    </div>
+
+    <div class="test-section">
+        <h2>📝 测试日志</h2>
+        <div id="testLog" class="log-area"></div>
+    </div>
+
+    <script>
+        // 模拟当前用户信息
+        const currentUserId = 'test-user-' + Math.random().toString(36).substr(2, 9);
+        const currentUsername = '测试用户';
+        const roomId = 'test-room-123';
+
+        // 日志函数
+        function log(message) {
+            const logArea = document.getElementById('testLog');
+            const timestamp = new Date().toLocaleTimeString();
+            logArea.innerHTML += `[${timestamp}] ${message}\n`;
+            logArea.scrollTop = logArea.scrollHeight;
+        }
+
+        // 模拟通话状态消息
+        function simulateCallStatusMessage() {
+            const callStatusMessage = {
+                roomId: roomId,
+                type: 'call-status',
+                text: `${currentUsername} 发起了语音通话`,
+                author: '系统',
+                userId: 'system',
+                time: new Date().toLocaleTimeString('zh-CN', { 
+                    hour: '2-digit', 
+                    minute: '2-digit' 
+                }),
+                timestamp: Date.now(),
+                isCallStatus: true,
+                callId: Date.now()
+            };
+
+            displayMessage(callStatusMessage);
+            log('✅ 模拟通话状态消息已创建');
+        }
+
+        // 模拟通话结束消息
+        function simulateCallEndMessage() {
+            const callEndMessage = {
+                roomId: roomId,
+                type: 'call-end',
+                text: '语音通话已结束',
+                author: '系统',
+                userId: 'system',
+                time: new Date().toLocaleTimeString('zh-CN', { 
+                    hour: '2-digit', 
+                    minute: '2-digit' 
+                }),
+                timestamp: Date.now(),
+                isCallEnd: true
+            };
+
+            displayMessage(callEndMessage);
+            log('✅ 模拟通话结束消息已创建');
+        }
+
+        // 显示消息
+        function displayMessage(message) {
+            const container = document.getElementById('messageContainer');
+            const messageDiv = document.createElement('div');
+            
+            if (message.isCallStatus) {
+                messageDiv.className = 'call-status-message';
+                messageDiv.innerHTML = `
+                    <div><strong>${message.text}</strong></div>
+                    <div style="font-size: 12px; color: #666; margin-top: 5px;">${message.time}</div>
+                    <button class="join-button" onclick="joinCall()">
+                        📞 加入通话
+                    </button>
+                `;
+            } else if (message.isCallEnd) {
+                messageDiv.className = 'call-status-message';
+                messageDiv.style.background = '#f8d7da';
+                messageDiv.style.borderLeftColor = '#dc3545';
+                messageDiv.innerHTML = `
+                    <div><strong>${message.text}</strong></div>
+                    <div style="font-size: 12px; color: #666; margin-top: 5px;">${message.time}</div>
+                `;
+            } else {
+                messageDiv.className = 'message-preview';
+                messageDiv.innerHTML = `
+                    <div><strong>${message.author}:</strong> ${message.text}</div>
+                    <div style="font-size: 12px; color: #666; margin-top: 5px;">${message.time}</div>
+                `;
+            }
+            
+            container.appendChild(messageDiv);
+        }
+
+        // 模拟加入通话
+        function joinCall() {
+            log('🔄 用户点击了"加入通话"按钮');
+            alert('模拟加入通话功能');
+        }
+
+        // 清空消息
+        function clearMessages() {
+            document.getElementById('messageContainer').innerHTML = '';
+            log('🗑️ 消息已清空');
+        }
+
+        // 初始化页面
+        function initPage() {
+            // 显示消息格式
+            const callStatusFormat = {
+                roomId: "room-123",
+                type: "call-status",
+                text: "用户名 发起了语音通话",
+                author: "系统",
+                userId: "system",
+                time: "14:30",
+                timestamp: 1234567890,
+                isCallStatus: true,
+                callId: 1234567890
+            };
+
+            const callEndFormat = {
+                roomId: "room-123",
+                type: "call-end",
+                text: "语音通话已结束",
+                author: "系统",
+                userId: "system",
+                time: "14:35",
+                timestamp: 1234567890,
+                isCallEnd: true
+            };
+
+            document.getElementById('callStatusFormat').textContent = JSON.stringify(callStatusFormat, null, 2);
+            document.getElementById('callEndFormat').textContent = JSON.stringify(callEndFormat, null, 2);
+
+            log('📱 测试页面已初始化');
+            log(`👤 当前用户ID: ${currentUserId}`);
+            log(`🏠 房间ID: ${roomId}`);
+        }
+
+        // 页面加载完成后初始化
+        window.onload = initPage;
+    </script>
+</body>
+</html>

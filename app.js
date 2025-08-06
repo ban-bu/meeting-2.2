@@ -969,10 +969,20 @@ function toggleVoiceCall() {
 function isOtherUserInCall() {
     if (!participants || participants.length === 0) return false;
     
+    // 检测其他用户的通话状态，确保用户有有效连接
     const othersInCall = participants.filter(p => 
         p.userId !== currentUserId && 
-        (p.status === 'in-call' || p.status === 'calling')
+        (p.status === 'in-call' || p.status === 'calling') &&
+        p.socketId && p.socketId.trim() !== '' // 确保有有效的socket连接
     );
+    
+    console.log('📞 检测其他用户通话状态:', {
+        totalParticipants: participants.length,
+        onlineParticipants: participants.filter(p => p.status === 'online').length,
+        inCallParticipants: participants.filter(p => p.status === 'in-call' || p.status === 'calling').length,
+        othersInCallCount: othersInCall.length,
+        othersInCall: othersInCall.map(p => ({ userId: p.userId, name: p.name, status: p.status, hasSocket: !!p.socketId }))
+    });
     
     return othersInCall.length > 0;
 }
@@ -992,14 +1002,44 @@ async function joinOngoingCall() {
         console.log('📞 加入正在进行的通话...');
         
         // ===== 新增：主动请求服务器获取当前通话参与者 =====
-        if (typeof roomId !== 'undefined' && roomId) {
+        // 确保获取正确的roomId
+        let currentRoomId = roomId || window.roomId;
+        
+        // 如果还是没有roomId，尝试从URL获取
+        if (!currentRoomId) {
+            const urlParams = new URLSearchParams(window.location.search);
+            currentRoomId = urlParams.get('room');
+        }
+        
+        // 如果还是没有roomId，尝试从DOM获取
+        if (!currentRoomId) {
+            const roomIdElement = document.getElementById('roomId');
+            if (roomIdElement && roomIdElement.textContent) {
+                currentRoomId = roomIdElement.textContent.replace('房间: ', '').trim();
+            }
+        }
+        
+        console.log('📞 当前roomId检查:', {
+            globalRoomId: roomId,
+            windowRoomId: window.roomId,
+            currentRoomId: currentRoomId
+        });
+        
+        if (currentRoomId) {
             try {
-                const resp = await fetch(`/api/rooms/${roomId}/participants`);
+                console.log('📞 正在获取服务器通话参与者，roomId:', currentRoomId);
+                const resp = await fetch(`/api/rooms/${encodeURIComponent(currentRoomId)}/participants`);
+                console.log('📞 API响应状态:', resp.status, resp.statusText);
+                
                 if (resp.ok) {
                     const data = await resp.json();
+                    console.log('📞 服务器返回的参与者数据:', data);
+                    
                     if (data && Array.isArray(data.participants)) {
                         // 只保留 status 为 in-call 或 calling 的用户
                         const inCallUsers = data.participants.filter(p => p.status === 'in-call' || p.status === 'calling');
+                        console.log('📞 当前在通话中的用户:', inCallUsers);
+                        
                         // 更新本地 participants
                         participants = data.participants;
                         // 更新 callParticipants
@@ -1013,11 +1053,14 @@ async function joinOngoingCall() {
                         console.log('✅ 已同步服务器通话参与者:', Array.from(callParticipants));
                     }
                 } else {
-                    console.warn('⚠️ 获取通话参与者失败:', resp.status);
+                    const errorText = await resp.text();
+                    console.warn('⚠️ 获取通话参与者失败:', resp.status, resp.statusText, errorText);
                 }
             } catch (err) {
-                console.warn('⚠️ 获取通话参与者异常:', err);
+                console.warn('⚠️ 获取通话参与者异常:', err.message, err);
             }
+        } else {
+            console.warn('⚠️ 无法获取roomId，跳过服务器同步');
         }
         // ===== 新增逻辑结束 =====
         
@@ -1075,20 +1118,54 @@ async function joinOngoingCall() {
             }
         });
         
+        // 检查是否需要重新发起通话状态消息
+        const hasActiveCallMessage = messages.find(msg => msg.isCallStatus && !msg.isCallEnd);
+        const hasOtherParticipants = existingCallParticipants.length > 0;
+        
+        // 检查是否有通话结束消息
+        const hasCallEndMessage = messages.find(msg => msg.isCallEnd);
+        
+        // 如果有通话结束消息，且没有其他参与者，说明通话已经完全结束，不允许加入
+        if (hasCallEndMessage && !hasOtherParticipants) {
+            console.log('📞 通话已结束，无法加入已结束的通话');
+            showToast('通话已结束，无法加入', 'error');
+            // 清理资源
+            if (localStream) {
+                localStream.getTracks().forEach(track => track.stop());
+                localStream = null;
+            }
+            if (audioMixer) {
+                audioMixer.cleanup();
+                audioMixer = null;
+            }
+            isInCall = false;
+            return;
+        }
+        
+        // 如果没有活跃的通话状态消息，且没有其他参与者，说明通话已经完全结束，需要重新发起
+        if (!hasActiveCallMessage && !hasOtherParticipants) {
+            console.log('📞 通话已结束，重新发起通话状态消息');
+            showCallStatusMessage();
+        }
+        
         // 更新UI
         updateCallUI();
         showCallPanel();
+        
+        // 更新通话状态消息UI
+        updateCallStatusMessages();
         
         // 同步参与者数据
         syncCallParticipants();
         
         // 通知其他用户自己加入了通话
-        console.log('📞 通知其他用户加入通话，roomId:', roomId, 'currentUserId:', currentUserId, 'currentUsername:', currentUsername);
+        console.log('📞 通知其他用户加入通话，roomId:', currentRoomId, 'currentUserId:', currentUserId, 'currentUsername:', currentUsername);
         if (isRealtimeEnabled && window.realtimeClient) {
             window.realtimeClient.sendCallAccept({
-                roomId,
+                roomId: currentRoomId,
                 userId: currentUserId,
-                userName: currentUsername
+                userName: currentUsername,
+                callCreator: window.currentCallCreator // 传递通话创建者信息
             });
         } else {
             console.warn('⚠️ 实时通信未启用或客户端未初始化');
@@ -1192,10 +1269,23 @@ async function startVoiceCall() {
         syncCallParticipants();
         
         // 通知其他用户加入通话
-        console.log('📞 发送通话邀请，roomId:', roomId, 'currentUserId:', currentUserId, 'currentUsername:', currentUsername);
+        // 确保获取正确的roomId
+        let currentRoomId = roomId || window.roomId;
+        if (!currentRoomId) {
+            const urlParams = new URLSearchParams(window.location.search);
+            currentRoomId = urlParams.get('room');
+        }
+        if (!currentRoomId) {
+            const roomIdElement = document.getElementById('roomId');
+            if (roomIdElement && roomIdElement.textContent) {
+                currentRoomId = roomIdElement.textContent.replace('房间: ', '').trim();
+            }
+        }
+        
+        console.log('📞 发送通话邀请，roomId:', currentRoomId, 'currentUserId:', currentUserId, 'currentUsername:', currentUsername);
         if (isRealtimeEnabled && window.realtimeClient) {
             const sent = window.realtimeClient.sendCallInvite({
-                roomId,
+                roomId: currentRoomId,
                 callerId: currentUserId,
                 callerName: currentUsername
             });
@@ -1253,7 +1343,10 @@ function cleanupCallResources() {
     
     // 停止本地流
     if (localStream) {
-        localStream.getTracks().forEach(track => track.stop());
+        localStream.getTracks().forEach(track => {
+            track.stop();
+            console.log('🔇 停止本地音频轨道:', track.kind);
+        });
         localStream = null;
     }
     
@@ -1261,20 +1354,98 @@ function cleanupCallResources() {
     if (audioMixer) {
         audioMixer.cleanup();
         audioMixer = null;
+        console.log('🎵 音频混合器已清理');
     }
     mixedAudioStream = null;
     
-    // 清理音频元素
+    // 清理所有音频元素 - 改进版本
+    console.log('🔊 清理音频元素，当前数量:', audioElements.size);
     audioElements.forEach((audioElement, userId) => {
-        audioElement.remove();
+        try {
+            // 暂停音频播放
+            if (audioElement.pause) {
+                audioElement.pause();
+            }
+            
+            // 清空音频源
+            audioElement.srcObject = null;
+            audioElement.src = '';
+            
+            // 从DOM中移除
+            if (audioElement.parentNode) {
+                audioElement.parentNode.removeChild(audioElement);
+            } else {
+                audioElement.remove();
+            }
+            
+            console.log(`🔊 已清理用户 ${userId} 的音频元素`);
+        } catch (error) {
+            console.error(`❌ 清理用户 ${userId} 音频元素失败:`, error);
+        }
     });
     audioElements.clear();
     
+    // 清理所有通过ID查找的音频元素（备用清理）
+    callParticipants.forEach(userId => {
+        const audioElement = document.getElementById(`audio-${userId}`);
+        if (audioElement) {
+            try {
+                audioElement.pause();
+                audioElement.srcObject = null;
+                audioElement.src = '';
+                audioElement.remove();
+                console.log(`🔊 备用清理：已移除用户 ${userId} 的音频元素`);
+            } catch (error) {
+                console.error(`❌ 备用清理用户 ${userId} 音频元素失败:`, error);
+            }
+        }
+    });
+    
     // 关闭所有对等连接
+    console.log('🔗 关闭WebRTC连接，当前数量:', peerConnections.size);
     peerConnections.forEach((connection, userId) => {
-        connection.close();
+        try {
+            // 关闭所有发送器
+            if (connection.getSenders) {
+                connection.getSenders().forEach(sender => {
+                    if (sender.track) {
+                        sender.track.stop();
+                    }
+                });
+            }
+            
+            // 关闭所有接收器
+            if (connection.getReceivers) {
+                connection.getReceivers().forEach(receiver => {
+                    if (receiver.track) {
+                        receiver.track.stop();
+                    }
+                });
+            }
+            
+            // 关闭连接
+            connection.close();
+            console.log(`🔗 已关闭用户 ${userId} 的WebRTC连接`);
+        } catch (error) {
+            console.error(`❌ 关闭用户 ${userId} WebRTC连接失败:`, error);
+        }
     });
     peerConnections.clear();
+    
+    // 清理远程流
+    console.log('📡 清理远程流，当前数量:', remoteStreams.size);
+    remoteStreams.forEach((stream, userId) => {
+        try {
+            if (stream && stream.getTracks) {
+                stream.getTracks().forEach(track => {
+                    track.stop();
+                    console.log(`📡 停止用户 ${userId} 的远程音频轨道`);
+                });
+            }
+        } catch (error) {
+            console.error(`❌ 停止用户 ${userId} 远程流失败:`, error);
+        }
+    });
     remoteStreams.clear();
     
     // 重置状态
@@ -1284,15 +1455,28 @@ function cleanupCallResources() {
     callStartTime = null;
     callDuration = null;
     
+    // 重置参与者状态 - 确保所有参与者状态都被重置
+    if (participants && participants.length > 0) {
+        participants.forEach(participant => {
+            if (participant.status === 'in-call' || participant.status === 'calling') {
+                participant.status = 'online';
+                console.log(`🔄 重置用户 ${participant.name} 的状态为 online`);
+            }
+        });
+    }
+    
     // 更新UI
     updateCallUI();
     hideCallPanel();
+    
+    // 更新通话状态消息UI
+    updateCallStatusMessages();
     
     // 显示通话结束状态消息
     showCallEndMessage();
     
     showToast('语音通话已结束', 'info');
-    console.log('✅ 通话资源已清理');
+    console.log('✅ 通话资源已完全清理');
     
     // 更新转录按钮状态（禁用转录功能）
     if (typeof onCallStatusChange === 'function') {
@@ -1304,16 +1488,36 @@ function cleanupCallResources() {
 function endVoiceCall() {
     console.log('📞 结束语音通话...');
     
-    // 清理资源
-    cleanupCallResources();
+    // 检查当前用户是否是通话创建者
+    const isCallCreator = window.currentCallCreator === currentUserId;
     
-    // 通知其他用户结束通话
-    if (isRealtimeEnabled && window.realtimeClient) {
-        window.realtimeClient.sendCallEnd({
-            roomId,
-            userId: currentUserId
-        });
+    if (isCallCreator) {
+        console.log('📞 创建者结束通话，所有人退出');
+        // 创建者结束通话，发送通话结束消息给所有人
+        showCallEndMessage();
+        
+        // 通知其他用户通话结束
+        if (isRealtimeEnabled && window.realtimeClient) {
+            window.realtimeClient.sendCallEnd({
+                roomId,
+                userId: currentUserId,
+                isCreatorEnd: true // 标识是创建者结束
+            });
+        }
+    } else {
+        console.log('📞 普通参与者退出通话，只影响自己');
+        // 普通参与者退出，只通知其他人自己离开
+        if (isRealtimeEnabled && window.realtimeClient) {
+            window.realtimeClient.sendCallEnd({
+                roomId,
+                userId: currentUserId,
+                isCreatorEnd: false // 标识不是创建者结束
+            });
+        }
     }
+    
+    // 清理本地资源
+    cleanupCallResources();
     
     console.log('✅ 语音通话已结束');
 }
@@ -1375,6 +1579,9 @@ async function acceptCall() {
         showCallPanel();
         hideIncomingCallModal();
         
+        // 更新通话状态消息UI
+        updateCallStatusMessages();
+        
         // 同步参与者数据
         syncCallParticipants();
         
@@ -1383,7 +1590,8 @@ async function acceptCall() {
             window.realtimeClient.sendCallAccept({
                 roomId,
                 userId: currentUserId,
-                userName: currentUsername
+                userName: currentUsername,
+                callCreator: window.currentCallCreator // 传递通话创建者信息
             });
         }
         
@@ -1532,18 +1740,37 @@ function updateCallButton() {
 
 // 显示微信群聊式的通话状态提示
 function showCallStatusMessage() {
+    // 先检查是否已经有活跃的通话状态消息，如果有则不重复创建
+    const existingCallMessage = messages.find(msg => msg.isCallStatus && !msg.isCallEnd);
+    if (existingCallMessage) {
+        console.log('已存在活跃的通话状态消息，跳过创建');
+        return;
+    }
+    
+    // 记录通话创建者
+    window.currentCallCreator = currentUserId;
+    console.log('📞 设置通话创建者:', currentUserId, currentUsername);
+    
     // 创建微信群聊式的通话状态消息
+    const callId = Date.now();
+    window.lastCallId = callId; // 记录最后一次通话ID，用于防重复
+    
     const callStatusMessage = {
+        roomId: roomId, // 添加必要的roomId字段
         type: 'call-status',
         text: `${currentUsername} 发起了语音通话`,
         author: '系统',
         userId: 'system',
+        originUserId: currentUserId, // 添加原始发送者ID
+        callCreator: currentUserId, // 记录通话创建者
+        callCreatorName: currentUsername, // 记录通话创建者名称
         time: new Date().toLocaleTimeString('zh-CN', { 
             hour: '2-digit', 
             minute: '2-digit' 
         }),
         timestamp: Date.now(),
-        isCallStatus: true
+        isCallStatus: true,
+        callId: callId // 添加唯一标识符
     };
     
     // 添加到消息列表并渲染
@@ -1560,14 +1787,42 @@ function showCallStatusMessage() {
     }
 }
 
+// 更新现有的通话状态消息
+function updateCallStatusMessages() {
+    // 重新渲染所有通话状态消息，确保加入按钮状态正确
+    const callStatusMessages = messages.filter(msg => msg.isCallStatus && !msg.isCallEnd);
+    if (callStatusMessages.length > 0) {
+        // 重新渲染消息列表
+        messagesContainer.innerHTML = '';
+        messages.forEach(msg => renderMessage(msg));
+        scrollToBottom();
+        console.log('🔄 已更新通话状态消息UI');
+    }
+}
+
 // 显示通话结束状态消息
 function showCallEndMessage() {
+    // 查找并移除活跃的通话状态消息
+    const activeCallMessageIndex = messages.findIndex(msg => msg.isCallStatus && !msg.isCallEnd);
+    if (activeCallMessageIndex !== -1) {
+        // 移除活跃的通话状态消息
+        messages.splice(activeCallMessageIndex, 1);
+        console.log('已移除活跃的通话状态消息');
+        
+        // 重新渲染消息列表
+        messagesContainer.innerHTML = '';
+        messages.forEach(msg => renderMessage(msg));
+        scrollToBottom();
+    }
+    
     // 创建通话结束状态消息
     const callEndMessage = {
+        roomId: roomId, // 添加必要的roomId字段
         type: 'call-end',
         text: '语音通话已结束',
         author: '系统',
         userId: 'system',
+        originUserId: currentUserId, // 添加原始发送者ID
         time: new Date().toLocaleTimeString('zh-CN', { 
             hour: '2-digit', 
             minute: '2-digit' 
@@ -1686,17 +1941,64 @@ function updateCallActions() {
     } else {
         // 当前用户不在通话中，检查是否有其他人在通话
         const otherUsersInCall = isOtherUserInCall();
-        if (otherUsersInCall) {
+        
+        // 检查是否有通话结束消息
+        const hasCallEndMessage = messages.find(msg => msg.isCallEnd);
+        
+        // 检查是否有活跃的通话状态消息
+        const hasActiveCallMessage = messages.find(msg => msg.isCallStatus && !msg.isCallEnd);
+        
+        // 获取在线的通话参与者数量
+        const onlineCallParticipants = participants.filter(p => 
+            (p.status === 'in-call' || p.status === 'calling') && 
+            p.socketId && p.socketId.trim() !== ''
+        );
+        
+        // 更严格的通话状态检测：
+        // 1. 必须有其他用户在通话中
+        // 2. 没有通话结束消息，或者通话结束消息之后有新的通话状态消息
+        // 3. 有活跃的通话状态消息
+        // 4. 有在线的通话参与者
+        
+        // 检查最后一条通话相关消息是否为结束消息
+        const lastCallMessage = [...messages].reverse().find(msg => msg.isCallStatus || msg.isCallEnd);
+        const isLastCallMessageEnd = lastCallMessage && lastCallMessage.isCallEnd;
+        
+        const canJoinCall = otherUsersInCall && 
+                           !isLastCallMessageEnd && 
+                           hasActiveCallMessage && 
+                           onlineCallParticipants.length > 0;
+        
+        if (canJoinCall) {
+            // 有其他用户在通话中，且通话未结束，且有活跃的通话状态
             joinCallBtn.style.display = 'block';
             leaveCallBtn.style.display = 'none';
             callStatusIndicator.innerHTML = '<i class="fas fa-phone"></i><span>有通话进行中</span>';
             callStatusIndicator.style.color = '#3b82f6';
         } else {
+            // 没有其他用户在通话中，或通话已结束，或没有活跃的通话状态
             joinCallBtn.style.display = 'none';
             leaveCallBtn.style.display = 'none';
-            callStatusIndicator.innerHTML = '<i class="fas fa-phone-slash"></i><span>暂无通话</span>';
+            
+            if (hasCallEndMessage) {
+                callStatusIndicator.innerHTML = '<i class="fas fa-phone-slash"></i><span>通话已结束</span>';
+            } else if (!hasActiveCallMessage) {
+                callStatusIndicator.innerHTML = '<i class="fas fa-phone-slash"></i><span>暂无通话</span>';
+            } else {
+                callStatusIndicator.innerHTML = '<i class="fas fa-phone-slash"></i><span>通话已结束</span>';
+            }
             callStatusIndicator.style.color = '#6b7280';
         }
+        
+        // 添加调试信息
+        console.log('📞 通话状态检测:', {
+            otherUsersInCall,
+            hasCallEndMessage: !!hasCallEndMessage,
+            hasActiveCallMessage: !!hasActiveCallMessage,
+            onlineCallParticipantsCount: onlineCallParticipants.length,
+            canJoinCall,
+            joinBtnVisible: joinCallBtn.style.display === 'block'
+        });
     }
 }
 
@@ -1725,13 +2027,17 @@ function updateCallParticipants() {
     
     participantsList.innerHTML = '';
     
+    // 检查当前用户是否是通话创建者
+    const isCurrentUserCreator = window.currentCallCreator === currentUserId;
+    
     // 添加当前用户
     const currentUserDiv = document.createElement('div');
     currentUserDiv.className = 'call-participant';
+    const creatorBadge = isCurrentUserCreator ? ' <span class="creator-badge">创建者</span>' : '';
     currentUserDiv.innerHTML = `
         <div class="call-participant-avatar">${currentUsername.charAt(0).toUpperCase()}</div>
         <div class="call-participant-info">
-            <div class="call-participant-name">${currentUsername} (我)</div>
+            <div class="call-participant-name">${currentUsername} (我)${creatorBadge}</div>
             <div class="call-participant-status ${isMuted ? 'muted' : 'online'}">
                 <i class="fas fa-${isMuted ? 'microphone-slash' : 'microphone'}"></i>
                 ${isMuted ? '已静音' : '在线'}
@@ -1766,10 +2072,15 @@ function updateCallParticipants() {
             
             const participantDiv = document.createElement('div');
             participantDiv.className = 'call-participant';
+            
+            // 检查是否是通话创建者
+            const isParticipantCreator = window.currentCallCreator === participantId;
+            const creatorBadge = isParticipantCreator ? ' <span class="creator-badge">创建者</span>' : '';
+            
             participantDiv.innerHTML = `
                 <div class="call-participant-avatar">${participant.name.charAt(0).toUpperCase()}</div>
                 <div class="call-participant-info">
-                    <div class="call-participant-name">${participant.name}</div>
+                    <div class="call-participant-name">${participant.name}${creatorBadge}</div>
                     <div class="call-participant-status ${participant.isMuted ? 'muted' : 'online'}">
                         <i class="fas fa-${participant.isMuted ? 'microphone-slash' : 'microphone'}"></i>
                         ${participant.isMuted ? '已静音' : '在线'}
@@ -1845,21 +2156,85 @@ function stopCallTimer() {
 
 // WebRTC连接处理
 function createPeerConnection(userId) {
+    // 检查是否已存在连接，如果存在则先清理
+    const existingConnection = peerConnections.get(userId);
+    if (existingConnection) {
+        console.log('📞 清理已存在的WebRTC连接:', userId);
+        try {
+            existingConnection.close();
+        } catch (error) {
+            console.error('❌ 清理已存在连接失败:', error);
+        }
+        peerConnections.delete(userId);
+    }
+    
     const configuration = {
         iceServers: [
             { urls: 'stun:stun.l.google.com:19302' },
-            { urls: 'stun:stun1.l.google.com:19302' }
-        ]
+            { urls: 'stun:stun1.l.google.com:19302' },
+            { urls: 'stun:stun2.l.google.com:19302' },
+            { urls: 'stun:stun3.l.google.com:19302' }
+        ],
+        iceCandidatePoolSize: 10,
+        bundlePolicy: 'max-bundle',
+        rtcpMuxPolicy: 'require'
     };
     
-    const peerConnection = new RTCPeerConnection(configuration);
+    let peerConnection;
+    try {
+        peerConnection = new RTCPeerConnection(configuration);
+        console.log('📞 创建WebRTC连接成功:', userId);
+    } catch (error) {
+        console.error('❌ 创建WebRTC连接失败:', error);
+        return null;
+    }
+    
+    // 添加连接状态监听
+    peerConnection.onconnectionstatechange = () => {
+        console.log(`📞 连接状态变化 [${userId}]:`, peerConnection.connectionState);
+        
+        if (peerConnection.connectionState === 'failed') {
+            console.error(`❌ WebRTC连接失败 [${userId}]`);
+            // 尝试重新建立连接
+            setTimeout(() => {
+                if (callParticipants.has(userId)) {
+                    console.log(`🔄 尝试重新建立连接 [${userId}]`);
+                    createPeerConnection(userId);
+                }
+            }, 2000);
+        } else if (peerConnection.connectionState === 'connected') {
+            console.log(`✅ WebRTC连接建立成功 [${userId}]`);
+        }
+    };
+    
+    // 添加ICE连接状态监听
+    peerConnection.oniceconnectionstatechange = () => {
+        console.log(`📞 ICE连接状态变化 [${userId}]:`, peerConnection.iceConnectionState);
+        
+        if (peerConnection.iceConnectionState === 'failed') {
+            console.error(`❌ ICE连接失败 [${userId}]`);
+        } else if (peerConnection.iceConnectionState === 'connected') {
+            console.log(`✅ ICE连接建立成功 [${userId}]`);
+        }
+    };
+    
+    // 添加信令状态监听
+    peerConnection.onsignalingstatechange = () => {
+        console.log(`📞 信令状态变化 [${userId}]:`, peerConnection.signalingState);
+    };
     
     // 添加本地流
     if (localStream) {
-        localStream.getTracks().forEach(track => {
-            console.log('📞 添加音频轨道到对等连接:', track.kind, track.enabled);
-            peerConnection.addTrack(track, localStream);
-        });
+        try {
+            localStream.getTracks().forEach(track => {
+                console.log('📞 添加音频轨道到对等连接:', track.kind, track.enabled);
+                peerConnection.addTrack(track, localStream);
+            });
+        } catch (error) {
+            console.error('❌ 添加本地流失败:', error);
+        }
+    } else {
+        console.warn('⚠️ 本地流不存在，无法添加到WebRTC连接');
     }
     
     // 处理远程流
@@ -1870,53 +2245,82 @@ function createPeerConnection(userId) {
         
         // 添加到音频混合器
         if (audioMixer) {
-            audioMixer.addRemoteStream(userId, remoteStream);
-            mixedAudioStream = audioMixer.getMixedStream();
-            console.log('🎵 远程音频流已添加到混合器');
+            try {
+                audioMixer.addRemoteStream(userId, remoteStream);
+                mixedAudioStream = audioMixer.getMixedStream();
+                console.log('🎵 远程音频流已添加到混合器');
+            } catch (error) {
+                console.error('❌ 添加远程流到混合器失败:', error);
+            }
         }
         
         // 播放远程音频
-        const audioElement = document.createElement('audio');
-        audioElement.srcObject = remoteStream;
-        audioElement.autoplay = true;
-        audioElement.muted = !isSpeakerOn;
-        audioElement.volume = 1.0;
-        audioElement.id = `remote-audio-${userId}`;
-        
-        // 保存音频元素引用
-        audioElements.set(userId, audioElement);
-        
-        // 添加音频事件监听
-        audioElement.onloadedmetadata = () => {
-            console.log('📞 远程音频元数据加载完成');
-        };
-        
-        audioElement.onplay = () => {
-            console.log('📞 远程音频开始播放');
-        };
-        
-        audioElement.onerror = (error) => {
-            console.error('📞 远程音频播放错误:', error);
-        };
-        
-        document.body.appendChild(audioElement);
+        try {
+            const audioElement = document.createElement('audio');
+            audioElement.srcObject = remoteStream;
+            audioElement.autoplay = true;
+            audioElement.muted = !isSpeakerOn;
+            audioElement.volume = 1.0;
+            audioElement.id = `remote-audio-${userId}`;
+            
+            // 保存音频元素引用
+            audioElements.set(userId, audioElement);
+            
+            // 添加音频事件监听
+            audioElement.onloadedmetadata = () => {
+                console.log(`📞 远程音频元数据加载完成 [${userId}]`);
+            };
+            
+            audioElement.onplay = () => {
+                console.log(`📞 远程音频开始播放 [${userId}]`);
+            };
+            
+            audioElement.onerror = (error) => {
+                console.error(`📞 远程音频播放错误 [${userId}]:`, error);
+            };
+            
+            audioElement.oncanplay = () => {
+                console.log(`📞 远程音频可以播放 [${userId}]`);
+            };
+            
+            document.body.appendChild(audioElement);
+            console.log(`📞 远程音频元素已创建并添加到DOM [${userId}]`);
+        } catch (error) {
+            console.error(`❌ 创建远程音频元素失败 [${userId}]:`, error);
+        }
     };
     
     // 处理ICE候选
     peerConnection.onicecandidate = (event) => {
         if (event.candidate) {
+            console.log(`📞 生成ICE候选 [${userId}]:`, event.candidate.candidate);
             if (isRealtimeEnabled && window.realtimeClient) {
-                window.realtimeClient.sendIceCandidate({
-                    roomId,
-                    targetUserId: userId,
-                    candidate: event.candidate,
-                    fromUserId: currentUserId
-                });
+                try {
+                    window.realtimeClient.sendIceCandidate({
+                        roomId,
+                        targetUserId: userId,
+                        candidate: event.candidate,
+                        fromUserId: currentUserId
+                    });
+                } catch (error) {
+                    console.error(`❌ 发送ICE候选失败 [${userId}]:`, error);
+                }
             }
+        } else {
+            console.log(`📞 ICE候选收集完成 [${userId}]`);
         }
     };
     
+    // 处理ICE候选错误
+    peerConnection.onicecandidateerror = (event) => {
+        console.error(`❌ ICE候选错误 [${userId}]:`, event);
+    };
+    
+    // 初始化暂存ICE候选数组
+    peerConnection.pendingIceCandidates = [];
+    
     peerConnections.set(userId, peerConnection);
+    console.log(`📞 WebRTC连接已创建并保存 [${userId}]`);
     return peerConnection;
 }
 
@@ -1925,6 +2329,22 @@ function handleCallInvite(data) {
     console.log('📞 收到通话邀请:', data);
     console.log('📞 当前用户ID:', currentUserId, '当前用户名:', currentUsername);
     console.log('📞 是否已在通话中:', isInCall);
+    
+    // 重置通话状态，确保能正确处理新的通话邀请
+    if (!isInCall) {
+        // 清理可能残留的通话状态
+        callParticipants.clear();
+        
+        // 重置参与者状态
+        if (participants && participants.length > 0) {
+            participants.forEach(participant => {
+                if (participant.status === 'calling') {
+                    participant.status = 'online';
+                    console.log(`🔄 重置用户 ${participant.name} 的状态为 online`);
+                }
+            });
+        }
+    }
     
     if (isInCall) {
         // 如果已在通话中，自动拒绝
@@ -2045,18 +2465,46 @@ function handleCallAccept(data) {
 function handleCallReject(data) {
     console.log('📞 用户拒绝通话:', data);
     
+    // 只从通话参与者列表中移除，但不影响重新加入的能力
     callParticipants.delete(data.userId);
+    
+    // 清理该用户的WebRTC连接和音频元素
+    const audioElement = audioElements.get(data.userId);
+    if (audioElement) {
+        audioElement.remove();
+        audioElements.delete(data.userId);
+    }
+    
+    const peerConnection = peerConnections.get(data.userId);
+    if (peerConnection) {
+        peerConnection.close();
+        peerConnections.delete(data.userId);
+    }
+    
+    // 从音频混合器中移除远程流
+    if (audioMixer) {
+        audioMixer.removeRemoteStream(data.userId);
+        mixedAudioStream = audioMixer.getMixedStream();
+    }
+    
+    // 移除远程流
+    remoteStreams.delete(data.userId);
+    
     updateCallUI();
     
     if (data.reason === 'busy') {
         showToast('对方正在通话中', 'warning');
+    } else {
+        // 找到拒绝用户的名称
+        const rejectedUser = participants.find(p => p.userId === data.userId);
+        const userName = rejectedUser ? rejectedUser.name : '用户';
+        showToast(`${userName} 拒绝了通话`, 'info');
     }
 }
 
 // 处理通话结束
 function handleCallEnd(data) {
-    // 临时注释掉日志以减少输出
-    // console.log('📞 用户结束通话:', data);
+    console.log('📞 收到通话结束事件:', data);
     
     // 防止重复处理同一个用户的结束事件
     if (!callParticipants.has(data.userId)) {
@@ -2064,6 +2512,17 @@ function handleCallEnd(data) {
         return;
     }
     
+    // 检查是否是创建者结束通话
+    if (data.isCreatorEnd) {
+        console.log('📞 创建者结束通话，所有人退出');
+        // 创建者结束通话，所有人都退出
+        cleanupCallResources();
+        showCallEndMessage();
+        return;
+    }
+    
+    // 普通参与者退出，只移除该用户
+    console.log('📞 参与者退出通话:', data.userId);
     callParticipants.delete(data.userId);
     
     // 从音频混合器中移除远程流
@@ -2091,11 +2550,14 @@ function handleCallEnd(data) {
     
     updateCallUI();
     
-    // 只有当自己是最后一个参与者时才结束通话，避免循环触发
-    if (callParticipants.size <= 1 && callParticipants.has(currentUserId)) {
-        console.log('📞 只剩自己，结束通话');
-        // 直接清理资源，不发送callEnd事件
-        cleanupCallResources();
+    // 检查是否还有其他用户在通话中
+    const remainingParticipants = callParticipants.size;
+    console.log('📞 剩余通话参与者数量:', remainingParticipants);
+    
+    // 如果没有人在通话中了，发送通话结束消息
+    if (remainingParticipants === 0) {
+        console.log('📞 所有用户已退出，发送通话结束消息');
+        showCallEndMessage();
     }
 }
 
@@ -2555,6 +3017,55 @@ function setupRealtimeClient() {
         onMessageReceived: async (message) => {
             console.log('收到新消息:', message);
             
+            // 特殊处理通话状态消息
+            if (message.isCallStatus || message.isCallEnd) {
+                // 检查是否是自己发送的系统消息（通过originUserId或callId判断）
+                if (message.originUserId === currentUserId || 
+                    (message.callId && window.lastCallId === message.callId)) {
+                    console.log('跳过自己发送的通话状态消息');
+                    return;
+                }
+                
+                // 如果是通话结束消息，先移除活跃的通话状态消息
+                if (message.isCallEnd) {
+                    const activeCallMessageIndex = messages.findIndex(msg => msg.isCallStatus && !msg.isCallEnd);
+                    if (activeCallMessageIndex !== -1) {
+                        messages.splice(activeCallMessageIndex, 1);
+                        console.log('收到通话结束消息，移除活跃的通话状态消息');
+                        
+                        // 重新渲染消息列表
+                        messagesContainer.innerHTML = '';
+                        messages.forEach(msg => renderMessage(msg));
+                        scrollToBottom();
+                    }
+                }
+                
+                // 如果是通话状态消息，检查是否已存在相同的消息
+                if (message.isCallStatus) {
+                    const existingCallMessage = messages.find(msg => 
+                        msg.isCallStatus && !msg.isCallEnd && 
+                        Math.abs(msg.timestamp - message.timestamp) < 5000 // 5秒内的消息认为是重复的
+                    );
+                    if (existingCallMessage) {
+                        console.log('跳过重复的通话状态消息');
+                        return;
+                    }
+                    
+                    // 记录通话创建者信息
+                    if (message.callCreator) {
+                        window.currentCallCreator = message.callCreator;
+                        console.log('📞 从消息中获取通话创建者:', message.callCreator, message.callCreatorName);
+                    }
+                }
+                
+                // 添加通话相关消息
+                messages.push(message);
+                renderMessage(message);
+                scrollToBottom();
+                saveRoomData();
+                return;
+            }
+            
             // 避免重复显示自己发送的消息
             if (message.userId !== currentUserId) {
                 // 检查是否是重复的AI消息（防止AI回复重复显示）
@@ -2638,7 +3149,50 @@ function setupRealtimeClient() {
         
         onParticipantsUpdate: (participantsList) => {
             console.log('参与者列表更新:', participantsList);
-            participants = participantsList;
+            
+            // 更新参与者状态，确保状态准确性
+            participants = participantsList.map(participant => {
+                // 如果参与者有socketId，则认为在线；否则离线
+                const isOnline = participant.socketId && participant.socketId.trim() !== '';
+                
+                return {
+                    ...participant,
+                    status: isOnline ? 'online' : 'offline'
+                };
+            });
+            
+            // 更新通话参与者列表中的状态
+            if (callParticipants.size > 0) {
+                // 检查通话参与者是否仍然在线
+                const onlineParticipantIds = participants
+                    .filter(p => p.status === 'online')
+                    .map(p => p.userId);
+                
+                // 移除已离线的通话参与者
+                callParticipants.forEach(participantId => {
+                    if (!onlineParticipantIds.includes(participantId)) {
+                        console.log(`📞 移除离线的通话参与者: ${participantId}`);
+                        callParticipants.delete(participantId);
+                        
+                        // 清理对应的音频元素和连接
+                        const audioElement = document.getElementById(`audio-${participantId}`);
+                        if (audioElement) {
+                            audioElement.remove();
+                        }
+                        
+                        // 清理WebRTC连接
+                        if (peerConnections[participantId]) {
+                            peerConnections[participantId].close();
+                            delete peerConnections[participantId];
+                        }
+                    }
+                });
+                
+                // 更新通话UI
+                updateCallParticipants();
+                updateCallActions();
+            }
+            
             renderParticipants();
         },
         
@@ -2697,7 +3251,14 @@ function setupRealtimeClient() {
         },
         
         onCallAccept: (data) => {
-            console.log('用户接受通话:', data);
+            console.log('收到通话接受:', data);
+            
+            // 确保通话创建者信息正确设置
+            if (data.callCreator && !window.currentCallCreator) {
+                window.currentCallCreator = data.callCreator;
+                console.log('📞 从通话接受事件中设置创建者:', data.callCreator);
+            }
+            
             handleCallAccept(data);
         },
         
@@ -3276,20 +3837,25 @@ function renderMessage(message) {
             font-weight: 500;
         `;
         
+        // 检查当前用户是否已在通话中，决定是否显示加入按钮
+        const showJoinButton = !isInCall && !callParticipants.has(currentUserId);
+        
         messageDiv.innerHTML = `
             <div style="display: flex; align-items: center; justify-content: center; gap: 8px;">
                 <i class="fas fa-phone" style="color: #3b82f6;"></i>
                 <span>${message.text}</span>
-                <button onclick="joinOngoingCall()" style="
-                    background: #10b981;
-                    color: white;
-                    border: none;
-                    border-radius: 4px;
-                    padding: 4px 8px;
-                    font-size: 12px;
-                    cursor: pointer;
-                    margin-left: 8px;
-                ">加入</button>
+                ${showJoinButton ? `
+                    <button onclick="joinOngoingCall()" style="
+                        background: #10b981;
+                        color: white;
+                        border: none;
+                        border-radius: 4px;
+                        padding: 4px 8px;
+                        font-size: 12px;
+                        cursor: pointer;
+                        margin-left: 8px;
+                    ">加入</button>
+                ` : ''}
             </div>
         `;
         

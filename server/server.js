@@ -161,12 +161,18 @@ const io = socketIo(server, {
         credentials: true
     },
     maxHttpBufferSize: 1e7, // 10MB
-    transports: ['polling', 'websocket'], // Railway环境优先使用polling
+    transports: ['polling'], // 本地环境使用polling避免WebSocket连接问题
     allowEIO3: true, // 向后兼容
     pingTimeout: 60000, // 60秒
     pingInterval: 25000, // 25秒
     upgradeTimeout: 30000, // 30秒升级超时
-    allowUpgrades: true
+    allowUpgrades: true,
+    // 添加Railway环境特殊配置
+    path: '/socket.io/',
+    serveClient: false,
+    connectTimeout: 45000,
+    // 修复WebSocket帧头问题 - 移除wsEngine配置避免版本冲突
+    // wsEngine: 'ws'
 });
 
 // MongoDB连接
@@ -676,8 +682,11 @@ io.on('connection', (socket) => {
                     creatorName: username,
                     createdAt: new Date()
                 } : null),
-                isCreator
+                isCreator: isCreator
             });
+            
+            // 添加调试日志
+            logger.info(`房间数据发送完成: roomId=${roomId}, isCreator=${isCreator}, participants=${participants.length}`);
             
             // 通知房间其他用户新用户加入
             socket.to(roomId).emit('userJoined', participant);
@@ -697,7 +706,7 @@ io.on('connection', (socket) => {
     // 发送消息
     socket.on('sendMessage', async (messageData) => {
         try {
-            const { roomId, type, text, author, userId, file, isAIQuestion, originUserId } = messageData;
+            const { roomId, type, text, author, userId, file, isAIQuestion, originUserId, isCallStatus, isCallEnd, callId } = messageData;
             
             if (!roomId || !author || !userId) {
                 socket.emit('error', '消息格式错误');
@@ -718,6 +727,9 @@ io.on('connection', (socket) => {
                 file: file || null,
                 isAIQuestion: isAIQuestion || false, // 保留isAIQuestion属性
                 originUserId: originUserId || null, // 保留originUserId属性
+                isCallStatus: isCallStatus || false, // 保留通话状态标识
+                isCallEnd: isCallEnd || false, // 保留通话结束标识
+                callId: callId || null // 保留通话ID
             };
             
             // 保存消息
@@ -1065,23 +1077,59 @@ io.on('connection', (socket) => {
             logger.debug(`📞 房间 ${roomId} 不存在`);
         }
         
-        // 广播给房间内除发起者外的所有用户
-        socket.to(roomId).emit('callInvite', {
-            roomId,
-            callerId,
-            callerName
+        // 更新发起者状态为通话中
+        dataService.updateParticipant(roomId, callerId, {
+            status: 'in-call',
+            lastSeen: new Date()
+        }).then(() => {
+            logger.debug(`📞 发起者 ${callerName} 通话状态已更新为in-call`);
+            
+            // 广播给房间内除发起者外的所有用户
+            socket.to(roomId).emit('callInvite', {
+                roomId,
+                callerId,
+                callerName
+            });
+            
+            // 广播更新后的参与者列表
+            return dataService.getParticipants(roomId);
+        }).then(updatedParticipants => {
+            io.to(roomId).emit('participantsUpdate', updatedParticipants);
+            logger.debug(`📞 参与者列表已更新，当前通话参与者: ${updatedParticipants.filter(p => p.status === 'in-call').length} 人`);
+        }).catch(error => {
+            logger.error('更新发起者通话状态失败:', error);
         });
+        
         logger.debug(`📞 用户 ${callerName} 发起语音通话邀请`);
     });
     
     socket.on('callAccept', (data) => {
         const { roomId, userId, userName } = data;
+        logger.debug(`📞 收到通话接受事件: ${JSON.stringify(data)}`);
+        
         // 广播给房间内除接受者外的所有用户
         io.to(roomId).emit('callAccept', {
             roomId,
             userId,
             userName
         });
+        
+        // 更新参与者状态为通话中
+        dataService.updateParticipant(roomId, userId, {
+            status: 'in-call',
+            lastSeen: new Date()
+        }).then(() => {
+            logger.debug(`📞 用户 ${userName} 通话状态已更新为in-call`);
+            
+            // 广播更新后的参与者列表
+            return dataService.getParticipants(roomId);
+        }).then(updatedParticipants => {
+            io.to(roomId).emit('participantsUpdate', updatedParticipants);
+            logger.debug(`📞 参与者列表已更新，当前通话参与者: ${updatedParticipants.filter(p => p.status === 'in-call').length} 人`);
+        }).catch(error => {
+            logger.error('更新参与者通话状态失败:', error);
+        });
+        
         logger.debug(`📞 用户 ${userName} 接受语音通话`);
     });
     
@@ -1097,14 +1145,14 @@ io.on('connection', (socket) => {
     });
     
     socket.on('callEnd', (data) => {
-        const { roomId, userId } = data;
+        const { roomId, userId, isCreatorEnd } = data;
         // 广播给房间内除结束者外的所有用户
         io.to(roomId).emit('callEnd', {
             roomId,
-            userId
+            userId,
+            isCreatorEnd: isCreatorEnd || false
         });
-        // 临时注释掉这个日志以减少输出
-        // logger.debug(`📞 用户 ${userId} 结束语音通话`);
+        logger.debug(`📞 用户 ${userId} 结束语音通话 (创建者结束: ${isCreatorEnd || false})`);
     });
     
     socket.on('callOffer', (data) => {
@@ -1248,7 +1296,11 @@ app.get('/api/rooms/:roomId/messages', async (req, res) => {
 app.get('/api/rooms/:roomId/participants', async (req, res) => {
     try {
         const { roomId } = req.params;
+        logger.info(`📞 收到获取参与者请求: roomId=${roomId}`);
+        
         const participants = await dataService.getParticipants(roomId);
+        logger.info(`📞 获取到参与者数据: ${participants ? participants.length : 0} 个参与者`);
+        
         res.json({ participants });
     } catch (error) {
         logger.error('获取参与者失败: ' + error.message);
@@ -1976,6 +2028,17 @@ app.ws('/xfyun-proxy', (ws, req) => {
         if (xfyunWs) {
             xfyunWs.close();
         }
+    });
+});
+
+// 健康检查端点
+app.get('/health', (req, res) => {
+    res.json({
+        status: 'ok',
+        timestamp: new Date().toISOString(),
+        uptime: process.uptime(),
+        environment: process.env.NODE_ENV || 'development',
+        version: '1.0.0'
     });
 });
 

@@ -1,0 +1,496 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>通话Bug修复测试</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            margin: 0;
+            padding: 20px;
+            background: #f5f5f5;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 12px;
+            padding: 20px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        .header {
+            text-align: center;
+            margin-bottom: 30px;
+            padding-bottom: 20px;
+            border-bottom: 2px solid #e0e0e0;
+        }
+        .test-section {
+            margin-bottom: 30px;
+            padding: 20px;
+            border: 1px solid #ddd;
+            border-radius: 8px;
+            background: #fafafa;
+        }
+        .test-title {
+            font-size: 18px;
+            font-weight: bold;
+            color: #333;
+            margin-bottom: 15px;
+        }
+        .test-steps {
+            margin-bottom: 15px;
+        }
+        .test-steps li {
+            margin-bottom: 8px;
+            color: #666;
+        }
+        .btn {
+            padding: 10px 20px;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 14px;
+            margin: 5px;
+            transition: all 0.3s;
+        }
+        .btn.primary {
+            background: #007bff;
+            color: white;
+        }
+        .btn.success {
+            background: #28a745;
+            color: white;
+        }
+        .btn.danger {
+            background: #dc3545;
+            color: white;
+        }
+        .btn.warning {
+            background: #ffc107;
+            color: #212529;
+        }
+        .btn:hover {
+            opacity: 0.8;
+            transform: translateY(-1px);
+        }
+        .log-area {
+            background: #1e1e1e;
+            color: #00ff00;
+            padding: 15px;
+            border-radius: 6px;
+            font-family: 'Courier New', monospace;
+            font-size: 12px;
+            height: 200px;
+            overflow-y: auto;
+            margin-top: 15px;
+        }
+        .status {
+            padding: 10px;
+            border-radius: 6px;
+            margin: 10px 0;
+            font-weight: bold;
+        }
+        .status.info {
+            background: #d1ecf1;
+            color: #0c5460;
+            border: 1px solid #bee5eb;
+        }
+        .status.success {
+            background: #d4edda;
+            color: #155724;
+            border: 1px solid #c3e6cb;
+        }
+        .status.warning {
+            background: #fff3cd;
+            color: #856404;
+            border: 1px solid #ffeaa7;
+        }
+        .status.error {
+            background: #f8d7da;
+            color: #721c24;
+            border: 1px solid #f5c6cb;
+        }
+        .user-simulation {
+            display: flex;
+            gap: 20px;
+            margin-top: 20px;
+        }
+        .user-panel {
+            flex: 1;
+            border: 2px solid #007bff;
+            border-radius: 8px;
+            padding: 15px;
+            background: white;
+        }
+        .user-panel h4 {
+            margin: 0 0 15px 0;
+            color: #007bff;
+            text-align: center;
+        }
+        .messages-area {
+            height: 150px;
+            overflow-y: auto;
+            border: 1px solid #ddd;
+            padding: 10px;
+            margin: 10px 0;
+            background: #f9f9f9;
+            border-radius: 4px;
+        }
+        .message {
+            margin-bottom: 10px;
+            padding: 8px;
+            border-radius: 6px;
+            background: white;
+            border-left: 4px solid #007bff;
+        }
+        .message.call-status {
+            background: #e3f2fd;
+            border-left-color: #2196f3;
+        }
+        .message.call-end {
+            background: #ffebee;
+            border-left-color: #f44336;
+        }
+        .join-call-btn {
+            background: #28a745;
+            color: white;
+            border: none;
+            padding: 5px 10px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 12px;
+            margin-top: 5px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🐛 通话Bug修复测试</h1>
+            <p>测试通话状态消息重复和通话重启问题的修复效果</p>
+        </div>
+
+        <!-- Bug 1: 通话状态消息重复 -->
+        <div class="test-section">
+            <div class="test-title">🔄 Bug 1: 通话状态消息重复测试</div>
+            <div class="test-steps">
+                <strong>测试步骤：</strong>
+                <ol>
+                    <li>用户A发起语音通话</li>
+                    <li>检查消息列表中是否只有一条通话状态消息</li>
+                    <li>用户B加入通话</li>
+                    <li>再次检查是否没有重复的通话状态消息</li>
+                </ol>
+            </div>
+            <div>
+                <button class="btn primary" onclick="simulateCallStart('userA')">用户A发起通话</button>
+                <button class="btn success" onclick="simulateCallJoin('userB')">用户B加入通话</button>
+                <button class="btn danger" onclick="simulateCallEnd('userA')">用户A结束通话</button>
+                <button class="btn warning" onclick="clearMessages()">清空消息</button>
+            </div>
+            <div class="status info" id="bug1Status">等待测试...</div>
+        </div>
+
+        <!-- Bug 2: 通话重启问题 -->
+        <div class="test-section">
+            <div class="test-title">🔄 Bug 2: 通话重启问题测试</div>
+            <div class="test-steps">
+                <strong>测试步骤：</strong>
+                <ol>
+                    <li>用户A发起语音通话</li>
+                    <li>用户B加入通话</li>
+                    <li>用户A（创建者）退出通话</li>
+                    <li>用户C尝试加入通话，应该加入现有通话而不是重启</li>
+                    <li>所有用户退出后，用户D再次加入应该重新发起通话</li>
+                </ol>
+            </div>
+            <div>
+                <button class="btn primary" onclick="simulateComplexScenario()">模拟复杂场景</button>
+                <button class="btn warning" onclick="resetTest()">重置测试</button>
+            </div>
+            <div class="status info" id="bug2Status">等待测试...</div>
+        </div>
+
+        <!-- 用户模拟面板 -->
+        <div class="user-simulation">
+            <div class="user-panel">
+                <h4>👤 用户A (创建者)</h4>
+                <div class="messages-area" id="userAMessages"></div>
+                <div>
+                    <button class="btn primary" onclick="userAction('A', 'start')">发起通话</button>
+                    <button class="btn danger" onclick="userAction('A', 'end')">结束通话</button>
+                </div>
+            </div>
+            <div class="user-panel">
+                <h4>👤 用户B</h4>
+                <div class="messages-area" id="userBMessages"></div>
+                <div>
+                    <button class="btn success" onclick="userAction('B', 'join')">加入通话</button>
+                    <button class="btn danger" onclick="userAction('B', 'leave')">离开通话</button>
+                </div>
+            </div>
+            <div class="user-panel">
+                <h4>👤 用户C</h4>
+                <div class="messages-area" id="userCMessages"></div>
+                <div>
+                    <button class="btn success" onclick="userAction('C', 'join')">加入通话</button>
+                    <button class="btn danger" onclick="userAction('C', 'leave')">离开通话</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- 测试日志 -->
+        <div class="log-area" id="testLog"></div>
+    </div>
+
+    <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+    <script>
+        let socket;
+        let testMessages = [];
+        let callParticipants = new Set();
+        let currentCallId = null;
+
+        // 初始化Socket连接
+        function initSocket() {
+            socket = io('http://localhost:3001');
+            
+            socket.on('connect', () => {
+                log('✅ Socket连接成功');
+                // 加入测试房间
+                socket.emit('joinRoom', {
+                    roomId: 'test-room-bugs',
+                    userId: 'test-user',
+                    username: '测试用户'
+                });
+            });
+
+            socket.on('newMessage', (message) => {
+                log(`📨 收到消息: ${JSON.stringify(message)}`);
+                handleMessage(message);
+            });
+
+            socket.on('callInvite', (data) => {
+                log(`📞 收到通话邀请: ${JSON.stringify(data)}`);
+            });
+
+            socket.on('callAccept', (data) => {
+                log(`✅ 用户接受通话: ${JSON.stringify(data)}`);
+            });
+
+            socket.on('callEnd', (data) => {
+                log(`📞 用户结束通话: ${JSON.stringify(data)}`);
+            });
+        }
+
+        // 处理消息
+        function handleMessage(message) {
+            if (message.isCallStatus || message.isCallEnd) {
+                // 检查重复消息
+                const isDuplicate = testMessages.some(msg => 
+                    msg.isCallStatus === message.isCallStatus &&
+                    msg.isCallEnd === message.isCallEnd &&
+                    Math.abs(msg.timestamp - message.timestamp) < 1000
+                );
+
+                if (isDuplicate) {
+                    log('⚠️ 检测到重复的通话状态消息!', 'error');
+                    updateBug1Status('error', '检测到重复消息!');
+                    return;
+                }
+
+                testMessages.push(message);
+                renderMessage(message);
+
+                if (message.isCallStatus) {
+                    currentCallId = message.callId;
+                    updateBug1Status('success', '通话状态消息正常，无重复');
+                } else if (message.isCallEnd) {
+                    currentCallId = null;
+                    callParticipants.clear();
+                }
+            }
+        }
+
+        // 渲染消息到用户面板
+        function renderMessage(message) {
+            const users = ['A', 'B', 'C'];
+            users.forEach(user => {
+                const container = document.getElementById(`user${user}Messages`);
+                const messageDiv = document.createElement('div');
+                messageDiv.className = `message ${message.isCallStatus ? 'call-status' : message.isCallEnd ? 'call-end' : ''}`;
+                
+                let content = `<strong>${message.author}:</strong> ${message.text}`;
+                if (message.isCallStatus && !callParticipants.has(user)) {
+                    content += `<br><button class="join-call-btn" onclick="userAction('${user}', 'join')">加入通话</button>`;
+                }
+                
+                messageDiv.innerHTML = content;
+                container.appendChild(messageDiv);
+                container.scrollTop = container.scrollHeight;
+            });
+        }
+
+        // 模拟用户操作
+        function userAction(user, action) {
+            const userId = `user${user}`;
+            const username = `用户${user}`;
+
+            switch (action) {
+                case 'start':
+                    log(`📞 ${username} 发起通话`);
+                    sendCallStatusMessage(userId, username);
+                    callParticipants.add(user);
+                    break;
+                case 'join':
+                    if (currentCallId) {
+                        log(`📞 ${username} 加入通话`);
+                        callParticipants.add(user);
+                        socket.emit('callAccept', {
+                            roomId: 'test-room-bugs',
+                            userId: userId,
+                            userName: username
+                        });
+                    } else {
+                        log(`📞 ${username} 重新发起通话`);
+                        sendCallStatusMessage(userId, username);
+                        callParticipants.add(user);
+                    }
+                    break;
+                case 'end':
+                case 'leave':
+                    log(`📞 ${username} 离开通话`);
+                    callParticipants.delete(user);
+                    socket.emit('callEnd', {
+                        roomId: 'test-room-bugs',
+                        userId: userId,
+                        userName: username
+                    });
+                    
+                    if (callParticipants.size === 0) {
+                        sendCallEndMessage();
+                    }
+                    break;
+            }
+            
+            updateParticipantStatus();
+        }
+
+        // 发送通话状态消息
+        function sendCallStatusMessage(userId, username) {
+            const callId = Date.now();
+            currentCallId = callId;
+            
+            const message = {
+                roomId: 'test-room-bugs',
+                type: 'call-status',
+                text: `${username} 发起了语音通话`,
+                author: '系统',
+                userId: 'system',
+                originUserId: userId,
+                time: new Date().toLocaleTimeString('zh-CN', { 
+                    hour: '2-digit', 
+                    minute: '2-digit' 
+                }),
+                timestamp: Date.now(),
+                isCallStatus: true,
+                callId: callId
+            };
+
+            socket.emit('sendMessage', message);
+        }
+
+        // 发送通话结束消息
+        function sendCallEndMessage() {
+            const message = {
+                roomId: 'test-room-bugs',
+                type: 'call-end',
+                text: '语音通话已结束',
+                author: '系统',
+                userId: 'system',
+                time: new Date().toLocaleTimeString('zh-CN', { 
+                    hour: '2-digit', 
+                    minute: '2-digit' 
+                }),
+                timestamp: Date.now(),
+                isCallEnd: true
+            };
+
+            socket.emit('sendMessage', message);
+        }
+
+        // 更新参与者状态
+        function updateParticipantStatus() {
+            log(`📊 当前通话参与者: ${Array.from(callParticipants).join(', ')}`);
+        }
+
+        // 模拟复杂场景
+        function simulateComplexScenario() {
+            log('🎬 开始模拟复杂场景...');
+            
+            setTimeout(() => userAction('A', 'start'), 500);
+            setTimeout(() => userAction('B', 'join'), 1500);
+            setTimeout(() => userAction('A', 'end'), 3000);
+            setTimeout(() => {
+                log('🔍 测试用户C是否能正确加入现有通话...');
+                userAction('C', 'join');
+            }, 4000);
+            setTimeout(() => userAction('B', 'leave'), 6000);
+            setTimeout(() => userAction('C', 'leave'), 7000);
+            setTimeout(() => {
+                log('🔍 测试所有用户退出后重新加入是否会重启通话...');
+                userAction('A', 'join');
+            }, 8500);
+        }
+
+        // 更新Bug状态
+        function updateBug1Status(type, message) {
+            const status = document.getElementById('bug1Status');
+            status.className = `status ${type}`;
+            status.textContent = message;
+        }
+
+        function updateBug2Status(type, message) {
+            const status = document.getElementById('bug2Status');
+            status.className = `status ${type}`;
+            status.textContent = message;
+        }
+
+        // 清空消息
+        function clearMessages() {
+            testMessages = [];
+            ['A', 'B', 'C'].forEach(user => {
+                document.getElementById(`user${user}Messages`).innerHTML = '';
+            });
+            log('🧹 已清空所有消息');
+        }
+
+        // 重置测试
+        function resetTest() {
+            clearMessages();
+            callParticipants.clear();
+            currentCallId = null;
+            updateBug1Status('info', '等待测试...');
+            updateBug2Status('info', '等待测试...');
+            log('🔄 测试已重置');
+        }
+
+        // 日志函数
+        function log(message, type = 'info') {
+            const logArea = document.getElementById('testLog');
+            const timestamp = new Date().toLocaleTimeString();
+            const logEntry = `[${timestamp}] ${message}\n`;
+            logArea.textContent += logEntry;
+            logArea.scrollTop = logArea.scrollHeight;
+            
+            console.log(message);
+        }
+
+        // 页面加载时初始化
+        window.onload = function() {
+            log('🚀 通话Bug修复测试页面已加载');
+            initSocket();
+        };
+    </script>
+</body>
+</html>
