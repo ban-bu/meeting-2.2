@@ -1291,18 +1291,6 @@ async function startVoiceCall() {
         // 同步参与者数据
         syncCallParticipants();
         
-        // 通知其他用户有新的通话开始，更新他们的参与者列表
-        if (isRealtimeEnabled && window.realtimeClient) {
-            window.realtimeClient.sendCallParticipantsUpdate({
-                roomId: currentRoomId || roomId,
-                callParticipants: Array.from(callParticipants),
-                action: 'start',
-                userId: currentUserId,
-                userName: currentUsername
-            });
-        }
-        
-        // 通知其他用户加入通话
         // 确保获取正确的roomId
         let currentRoomId = roomId || window.roomId;
         if (!currentRoomId) {
@@ -1315,6 +1303,19 @@ async function startVoiceCall() {
                 currentRoomId = roomIdElement.textContent.replace('房间: ', '').trim();
             }
         }
+        
+        // 通知其他用户有新的通话开始，更新他们的参与者列表
+        if (isRealtimeEnabled && window.realtimeClient) {
+            window.realtimeClient.sendCallParticipantsUpdate({
+                roomId: currentRoomId || roomId,
+                callParticipants: Array.from(callParticipants),
+                action: 'start',
+                userId: currentUserId,
+                userName: currentUsername
+            });
+        }
+        
+        // 通知其他用户加入通话
         
         console.log('📞 发送通话邀请，roomId:', currentRoomId, 'currentUserId:', currentUserId, 'currentUsername:', currentUsername);
         if (isRealtimeEnabled && window.realtimeClient) {
