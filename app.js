@@ -1783,7 +1783,14 @@ function showCallStatusMessage() {
     
     // 通过WebSocket发送给其他用户
     if (isRealtimeEnabled && window.realtimeClient) {
-        window.realtimeClient.sendMessage(callStatusMessage);
+        // 确保消息包含完整的通话创建者信息
+        const messageToSend = {
+            ...callStatusMessage,
+            callCreator: currentUserId,
+            callCreatorName: currentUsername
+        };
+        window.realtimeClient.sendMessage(messageToSend);
+        console.log('📞 已发送通话状态消息给其他用户:', messageToSend);
     }
 }
 
@@ -1942,59 +1949,58 @@ function updateCallActions() {
         // 当前用户不在通话中，检查是否有其他人在通话
         const otherUsersInCall = isOtherUserInCall();
         
-        // 检查是否有通话结束消息
-        const hasCallEndMessage = messages.find(msg => msg.isCallEnd);
+        // 检查callParticipants Set中是否有其他用户（更直接的检测方法）
+        const hasOtherCallParticipants = callParticipants.size > 0 && 
+                                         (callParticipants.size > 1 || !callParticipants.has(currentUserId));
         
         // 检查是否有活跃的通话状态消息
         const hasActiveCallMessage = messages.find(msg => msg.isCallStatus && !msg.isCallEnd);
-        
-        // 获取在线的通话参与者数量
-        const onlineCallParticipants = participants.filter(p => 
-            (p.status === 'in-call' || p.status === 'calling') && 
-            p.socketId && p.socketId.trim() !== ''
-        );
-        
-        // 更严格的通话状态检测：
-        // 1. 必须有其他用户在通话中
-        // 2. 没有通话结束消息，或者通话结束消息之后有新的通话状态消息
-        // 3. 有活跃的通话状态消息
-        // 4. 有在线的通话参与者
         
         // 检查最后一条通话相关消息是否为结束消息
         const lastCallMessage = [...messages].reverse().find(msg => msg.isCallStatus || msg.isCallEnd);
         const isLastCallMessageEnd = lastCallMessage && lastCallMessage.isCallEnd;
         
-        const canJoinCall = otherUsersInCall && 
-                           !isLastCallMessageEnd && 
-                           hasActiveCallMessage && 
+        // 获取在线的通话参与者数量
+        const onlineCallParticipants = participants.filter(p => 
+            (p.status === 'in-call' || p.status === 'calling') && 
+            (p.socketId && p.socketId.trim() !== '' || p.isTemporary)
+        );
+        
+        // 简化的通话状态检测逻辑：
+        // 1. 有其他用户在通话中 OR callParticipants中有其他用户
+        // 2. 最后一条通话消息不是结束消息 OR 有活跃的通话状态消息
+        // 3. 有在线的通话参与者
+        const canJoinCall = (otherUsersInCall || hasOtherCallParticipants) && 
+                           (!isLastCallMessageEnd || hasActiveCallMessage) && 
                            onlineCallParticipants.length > 0;
         
         if (canJoinCall) {
-            // 有其他用户在通话中，且通话未结束，且有活跃的通话状态
+            // 有其他用户在通话中，可以加入
             joinCallBtn.style.display = 'block';
             leaveCallBtn.style.display = 'none';
             callStatusIndicator.innerHTML = '<i class="fas fa-phone"></i><span>有通话进行中</span>';
             callStatusIndicator.style.color = '#3b82f6';
         } else {
-            // 没有其他用户在通话中，或通话已结束，或没有活跃的通话状态
+            // 没有活跃的通话
             joinCallBtn.style.display = 'none';
             leaveCallBtn.style.display = 'none';
             
-            if (hasCallEndMessage) {
+            if (isLastCallMessageEnd) {
                 callStatusIndicator.innerHTML = '<i class="fas fa-phone-slash"></i><span>通话已结束</span>';
-            } else if (!hasActiveCallMessage) {
-                callStatusIndicator.innerHTML = '<i class="fas fa-phone-slash"></i><span>暂无通话</span>';
             } else {
-                callStatusIndicator.innerHTML = '<i class="fas fa-phone-slash"></i><span>通话已结束</span>';
+                callStatusIndicator.innerHTML = '<i class="fas fa-phone-slash"></i><span>暂无通话</span>';
             }
             callStatusIndicator.style.color = '#6b7280';
         }
         
         // 添加调试信息
         console.log('📞 通话状态检测:', {
+            isInCall,
             otherUsersInCall,
-            hasCallEndMessage: !!hasCallEndMessage,
+            hasOtherCallParticipants,
+            callParticipantsSize: callParticipants.size,
             hasActiveCallMessage: !!hasActiveCallMessage,
+            isLastCallMessageEnd,
             onlineCallParticipantsCount: onlineCallParticipants.length,
             canJoinCall,
             joinBtnVisible: joinCallBtn.style.display === 'block'
@@ -2055,19 +2061,19 @@ function updateCallParticipants() {
             
             // 如果找不到，创建一个临时的参与者对象
             if (!participant) {
-                // 尝试从实时通信客户端获取用户信息
-                if (window.realtimeClient && window.realtimeClient.socket) {
-                    // 创建一个基于用户ID的临时参与者对象
-                    participant = {
-                        userId: participantId,
-                        name: `用户${participantId.slice(-4)}`, // 使用用户ID的后4位作为显示名
-                        status: 'online'
-                    };
-                } else {
-                    // 如果无法获取用户信息，跳过这个参与者
-                    console.warn(`无法找到参与者信息: ${participantId}`);
-                    return;
-                }
+                // 创建一个基于用户ID的临时参与者对象
+                participant = {
+                    userId: participantId,
+                    name: `用户${participantId.slice(-4)}`, // 使用用户ID的后4位作为显示名
+                    status: 'in-call',
+                    joinTime: Date.now(),
+                    lastSeen: Date.now(),
+                    isTemporary: true // 标记为临时参与者
+                };
+                
+                // 将临时参与者添加到全局participants数组中，确保其他代码能找到
+                participants.push(participant);
+                console.log(`📞 创建并添加临时参与者: ${participantId} (${participant.name})`);
             }
             
             const participantDiv = document.createElement('div');
@@ -2415,30 +2421,40 @@ function handleCallAccept(data) {
     }
     
     // 确保参与者信息在participants数组中
-    if (!participants.find(p => p.userId === data.userId)) {
-        participants.push({
+    let participant = participants.find(p => p.userId === data.userId);
+    if (!participant) {
+        participant = {
             userId: data.userId,
             name: data.userName || `用户${data.userId.slice(-4)}`,
-            status: 'online',
+            status: 'in-call',
             joinTime: Date.now(),
-            lastSeen: Date.now()
-        });
-    }
-    
-    // 更新通话状态
-    const participant = participants.find(p => p.userId === data.userId);
-    if (participant) {
+            lastSeen: Date.now(),
+            socketId: 'active' // 标记为活跃用户
+        };
+        participants.push(participant);
+        console.log('📞 添加新参与者到participants数组:', participant);
+    } else {
+        // 更新现有参与者的状态
         participant.status = 'in-call';
+        participant.lastSeen = Date.now();
+        if (data.userName && !participant.name.startsWith('用户')) {
+            participant.name = data.userName; // 更新用户名
+        }
+        console.log('📞 更新现有参与者状态:', participant);
     }
     
     console.log('📞 通话参与者更新:', {
         newUserId: data.userId,
         newUserName: data.userName,
         callParticipantsSize: callParticipants.size,
-        callParticipants: Array.from(callParticipants)
+        callParticipants: Array.from(callParticipants),
+        participantsCount: participants.length
     });
     
+    // 强制更新UI
+    updateCallParticipants();
     updateCallUI();
+    renderParticipants(); // 更新主要参与者列表
     
     // 创建对等连接
     const peerConnection = createPeerConnection(data.userId);
@@ -2563,19 +2579,46 @@ function handleCallEnd(data) {
 
 // 同步通话参与者数据
 function syncCallParticipants() {
-    if (!isInCall) return;
+    if (!isInCall && callParticipants.size === 0) return;
     
     // 确保当前用户在参与者列表中
     if (!callParticipants.has(currentUserId)) {
         callParticipants.add(currentUserId);
     }
     
-    // 更新UI
+    // 确保所有通话参与者都在participants数组中
+    callParticipants.forEach(participantId => {
+        let participant = participants.find(p => p.userId === participantId);
+        if (!participant) {
+            // 创建临时参与者对象
+            participant = {
+                userId: participantId,
+                name: `用户${participantId.slice(-4)}`,
+                status: 'in-call',
+                joinTime: Date.now(),
+                lastSeen: Date.now(),
+                socketId: 'active',
+                isTemporary: true
+            };
+            participants.push(participant);
+            console.log(`📞 同步时添加临时参与者: ${participantId}`);
+        } else if (participant.status !== 'in-call') {
+            // 更新参与者状态
+            participant.status = 'in-call';
+            participant.lastSeen = Date.now();
+        }
+    });
+    
+    // 强制更新所有UI
+    updateCallParticipants();
     updateCallUI();
+    renderParticipants();
     
     console.log('📞 同步通话参与者数据:', {
         callParticipantsSize: callParticipants.size,
         callParticipantsIds: Array.from(callParticipants),
+        participantsCount: participants.length,
+        inCallParticipants: participants.filter(p => p.status === 'in-call').length,
         currentUserId
     });
 }
@@ -3019,11 +3062,23 @@ function setupRealtimeClient() {
             
             // 特殊处理通话状态消息
             if (message.isCallStatus || message.isCallEnd) {
-                // 检查是否是自己发送的系统消息（通过originUserId或callId判断）
-                if (message.originUserId === currentUserId || 
-                    (message.callId && window.lastCallId === message.callId)) {
-                    console.log('跳过自己发送的通话状态消息');
+                // 检查是否已存在相同的通话状态消息（防止重复）
+                const existingMessage = messages.find(msg => 
+                    msg.isCallStatus === message.isCallStatus && 
+                    msg.isCallEnd === message.isCallEnd &&
+                    msg.callId === message.callId &&
+                    Math.abs((new Date(msg.timestamp) - new Date(message.timestamp))) < 5000
+                );
+                
+                if (existingMessage) {
+                    console.log('跳过重复的通话状态消息');
                     return;
+                }
+                
+                // 设置通话创建者信息
+                if (message.isCallStatus && message.callCreator) {
+                    window.currentCallCreator = message.callCreator;
+                    console.log('📞 从接收的消息中设置通话创建者:', message.callCreator);
                 }
                 
                 // 如果是通话结束消息，先移除活跃的通话状态消息
@@ -3063,6 +3118,27 @@ function setupRealtimeClient() {
                 renderMessage(message);
                 scrollToBottom();
                 saveRoomData();
+                
+                // 如果是通话状态消息，强制更新所有相关UI
+                if (message.isCallStatus) {
+                    // 显示通话面板（除非用户已经在通话中）
+                    if (!isInCall) {
+                        showCallPanel();
+                    }
+                    
+                    // 强制更新所有通话相关UI
+                    updateCallUI();
+                    updateCallActions();
+                    updateCallButton();
+                    
+                    console.log('📞 收到通话状态消息，已更新所有UI组件');
+                } else if (message.isCallEnd) {
+                    // 通话结束时隐藏通话面板
+                    hideCallPanel();
+                    updateCallUI();
+                    console.log('📞 收到通话结束消息，已隐藏通话面板');
+                }
+                
                 return;
             }
             
@@ -3838,7 +3914,9 @@ function renderMessage(message) {
         `;
         
         // 检查当前用户是否已在通话中，决定是否显示加入按钮
-        const showJoinButton = !isInCall && !callParticipants.has(currentUserId);
+        // 修复逻辑：只要用户不在通话中，就显示加入按钮（除非是通话创建者）
+        const isCallCreator = message.callCreator === currentUserId || window.currentCallCreator === currentUserId;
+        const showJoinButton = !isInCall && !isCallCreator;
         
         messageDiv.innerHTML = `
             <div style="display: flex; align-items: center; justify-content: center; gap: 8px;">
