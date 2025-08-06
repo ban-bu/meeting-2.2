@@ -2296,20 +2296,30 @@ function createPeerConnection(userId) {
         iceServers: [
             { urls: 'stun:stun.l.google.com:19302' },
             { urls: 'stun:stun1.l.google.com:19302' },
-            { urls: 'stun:stun2.l.google.com:19302' },
-            { urls: 'stun:stun3.l.google.com:19302' },
-            { urls: 'stun:stun4.l.google.com:19302' },
-            // 添加备用STUN服务器
             { urls: 'stun:stun.cloudflare.com:3478' },
-            { urls: 'stun:stun.nextcloud.com:443' }
+            // 添加免费TURN服务器
+            {
+                urls: 'turn:openrelay.metered.ca:80',
+                username: 'openrelayproject',
+                credential: 'openrelayproject'
+            },
+            {
+                urls: 'turn:openrelay.metered.ca:443',
+                username: 'openrelayproject', 
+                credential: 'openrelayproject'
+            },
+            {
+                urls: 'turn:openrelay.metered.ca:443?transport=tcp',
+                username: 'openrelayproject',
+                credential: 'openrelayproject'
+            }
         ],
         iceCandidatePoolSize: 10,
         bundlePolicy: 'max-bundle',
         rtcpMuxPolicy: 'require',
-        // 改善连接建立
         iceTransportPolicy: 'all',
-        // 缩短ICE收集超时时间
-        iceGatheringTimeout: 5000
+        // 延长ICE收集时间以便TURN服务器有足够时间响应
+        iceGatheringTimeout: 10000
     };
     
     let peerConnection;
@@ -2327,15 +2337,54 @@ function createPeerConnection(userId) {
         
         if (peerConnection.connectionState === 'failed') {
             console.error(`❌ WebRTC连接失败 [${userId}]`);
-            // 尝试重新建立连接
-            setTimeout(() => {
+            
+            // 检查是否已经达到重试上限
+            if (!peerConnection.connectionRetryCount) {
+                peerConnection.connectionRetryCount = 0;
+            }
+            
+            if (peerConnection.connectionRetryCount < 1) {
+                peerConnection.connectionRetryCount++;
+                console.log(`🔄 尝试重新建立连接 [${userId}] (连接重试: ${peerConnection.connectionRetryCount}/1)`);
+                
+                setTimeout(() => {
+                    if (callParticipants.has(userId) && isInCall) {
+                        // 移除旧连接
+                        const oldConnection = peerConnections.get(userId);
+                        if (oldConnection) {
+                            try {
+                                oldConnection.close();
+                            } catch (e) {
+                                console.error('关闭旧连接失败:', e);
+                            }
+                            peerConnections.delete(userId);
+                        }
+                        // 创建新连接
+                        createPeerConnection(userId);
+                    }
+                }, 3000);
+            } else {
+                console.error(`❌ 连接重试次数已达上限 [${userId}]，移除用户`);
                 if (callParticipants.has(userId)) {
-                    console.log(`🔄 尝试重新建立连接 [${userId}]`);
-                    createPeerConnection(userId);
+                    callParticipants.delete(userId);
+                    updateCallUI();
+                    showToast(`用户 ${userId} 连接失败，已从通话中移除`, 'warning');
                 }
-            }, 2000);
+            }
         } else if (peerConnection.connectionState === 'connected') {
             console.log(`✅ WebRTC连接建立成功 [${userId}]`);
+            // 重置重试计数器
+            peerConnection.connectionRetryCount = 0;
+            peerConnection.iceErrorCount = 0;
+            peerConnection.retryCount = 0;
+            
+            // 清除连接超时
+            if (peerConnection.connectionTimeout) {
+                clearTimeout(peerConnection.connectionTimeout);
+                peerConnection.connectionTimeout = null;
+            }
+        } else if (peerConnection.connectionState === 'disconnected') {
+            console.warn(`⚠️ WebRTC连接断开 [${userId}]`);
         }
     };
     
@@ -2343,10 +2392,29 @@ function createPeerConnection(userId) {
     peerConnection.oniceconnectionstatechange = () => {
         console.log(`📞 ICE连接状态变化 [${userId}]:`, peerConnection.iceConnectionState);
         
-        if (peerConnection.iceConnectionState === 'failed') {
-            console.error(`❌ ICE连接失败 [${userId}]`);
-        } else if (peerConnection.iceConnectionState === 'connected') {
-            console.log(`✅ ICE连接建立成功 [${userId}]`);
+        switch (peerConnection.iceConnectionState) {
+            case 'connected':
+            case 'completed':
+                console.log(`✅ ICE连接建立成功 [${userId}]`);
+                // 重置错误计数
+                peerConnection.iceErrorCount = 0;
+                
+                // 清除连接超时
+                if (peerConnection.connectionTimeout) {
+                    clearTimeout(peerConnection.connectionTimeout);
+                    peerConnection.connectionTimeout = null;
+                }
+                break;
+            case 'disconnected':
+                console.warn(`⚠️ ICE连接断开 [${userId}]，等待重连...`);
+                break;
+            case 'failed':
+                console.error(`❌ ICE连接失败 [${userId}]`);
+                // ICE连接失败时不再重试，交给连接状态处理器处理
+                break;
+            case 'closed':
+                console.log(`📞 ICE连接已关闭 [${userId}]`);
+                break;
         }
     };
     
@@ -2456,30 +2524,69 @@ function createPeerConnection(userId) {
         // 记录错误统计
         if (!peerConnection.iceErrorCount) {
             peerConnection.iceErrorCount = 0;
+            peerConnection.retryCount = 0;
         }
         peerConnection.iceErrorCount++;
         
-        // 如果错误过多，考虑重新建立连接
-        if (peerConnection.iceErrorCount > 10) {
-            console.warn(`⚠️ ICE候选错误过多 [${userId}]，将在稍后重试连接`);
+        // 如果错误过多，但重试次数未超限，则重试
+        if (peerConnection.iceErrorCount > 15 && peerConnection.retryCount < 2) {
+            console.warn(`⚠️ ICE候选错误过多 [${userId}]，将在稍后重试连接 (重试次数: ${peerConnection.retryCount + 1}/2)`);
+            peerConnection.retryCount++;
+            
             setTimeout(() => {
                 if (callParticipants.has(userId) && isInCall) {
                     console.log(`🔄 重新建立连接 [${userId}] (ICE错误过多)`);
                     // 移除旧连接
                     const oldConnection = peerConnections.get(userId);
                     if (oldConnection) {
-                        oldConnection.close();
+                        try {
+                            oldConnection.close();
+                        } catch (e) {
+                            console.error('关闭旧连接失败:', e);
+                        }
                         peerConnections.delete(userId);
                     }
                     // 创建新连接
                     createPeerConnection(userId);
                 }
-            }, 3000);
+            }, 5000 + Math.random() * 2000); // 添加随机延迟避免同时重试
+        } else if (peerConnection.retryCount >= 2) {
+            console.error(`❌ 连接失败次数过多 [${userId}]，停止重试。可能的原因：网络环境复杂或防火墙限制`);
+            // 从通话参与者列表中移除用户
+            if (callParticipants.has(userId)) {
+                callParticipants.delete(userId);
+                updateCallUI();
+                showToast(`用户 ${userId} 连接失败，已从通话中移除`, 'warning');
+            }
         }
     };
     
     // 初始化暂存ICE候选数组
     peerConnection.pendingIceCandidates = [];
+    
+    // 设置连接超时
+    peerConnection.connectionTimeout = setTimeout(() => {
+        if (peerConnection.connectionState !== 'connected' && 
+            peerConnection.iceConnectionState !== 'connected' && 
+            peerConnection.iceConnectionState !== 'completed') {
+            console.warn(`⏰ WebRTC连接超时 [${userId}]，自动移除`);
+            
+            // 移除超时的连接
+            if (callParticipants.has(userId)) {
+                callParticipants.delete(userId);
+                updateCallUI();
+                showToast(`用户 ${userId} 连接超时，已从通话中移除`, 'warning');
+            }
+            
+            // 清理连接
+            try {
+                peerConnection.close();
+            } catch (e) {
+                console.error('关闭超时连接失败:', e);
+            }
+            peerConnections.delete(userId);
+        }
+    }, 30000); // 30秒超时
     
     peerConnections.set(userId, peerConnection);
     console.log(`📞 WebRTC连接已创建并保存 [${userId}]`);
