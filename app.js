@@ -2317,7 +2317,8 @@ function createPeerConnection(userId) {
         iceCandidatePoolSize: 10,
         bundlePolicy: 'max-bundle',
         rtcpMuxPolicy: 'require',
-        iceTransportPolicy: 'all',
+        // Railway 等 PaaS 环境往往屏蔽 UDP，仅允许 443/80 TCP，因此在此类域名下强制使用 TURN 中继
+        iceTransportPolicy: window.location.hostname.endsWith('railway.app') ? 'relay' : 'all',
         // 延长ICE收集时间以便TURN服务器有足够时间响应
         iceGatheringTimeout: 10000
     };
@@ -2513,26 +2514,36 @@ function createPeerConnection(userId) {
     
     // 处理ICE候选错误
     peerConnection.onicecandidateerror = (event) => {
-        console.error(`❌ ICE候选错误 [${userId}]:`, {
-            errorCode: event.errorCode,
+        // 701 / 702 / 703 系列错误多为 STUN/TURN 网络可达性问题，通常不会真正导致连接失败，
+        // 因此这里对这些错误仅做告警而不计入重试统计，避免误触发大量重连导致通话中断。
+        const benignErrorCodes = [701, 702, 703, 704];
+        const isBenign = benignErrorCodes.includes(event.errorCode);
+
+        const logMethod = isBenign ? console.warn : console.error;
+        logMethod(`❌ ICE候选错误 [${userId}] (code: ${event.errorCode}):`, {
             errorText: event.errorText,
             address: event.address,
             port: event.port,
             url: event.url
         });
-        
+
+        if (isBenign) {
+            // 忽略常见的可恢复错误
+            return;
+        }
+
         // 记录错误统计
         if (!peerConnection.iceErrorCount) {
             peerConnection.iceErrorCount = 0;
             peerConnection.retryCount = 0;
         }
         peerConnection.iceErrorCount++;
-        
+
         // 如果错误过多，但重试次数未超限，则重试
         if (peerConnection.iceErrorCount > 15 && peerConnection.retryCount < 2) {
             console.warn(`⚠️ ICE候选错误过多 [${userId}]，将在稍后重试连接 (重试次数: ${peerConnection.retryCount + 1}/2)`);
             peerConnection.retryCount++;
-            
+
             setTimeout(() => {
                 if (callParticipants.has(userId) && isInCall) {
                     console.log(`🔄 重新建立连接 [${userId}] (ICE错误过多)`);
